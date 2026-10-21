@@ -1,6 +1,8 @@
-
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  getAppName: () => "Athena Exam",
+  setFullScreen: () => ipcRenderer.invoke("full-screen"),
+  getRemainingTime: () => ipcRenderer.invoke("get-remaining-time"),
+  startTest: () => ipcRenderer.invoke("start-test"),
+  showExamRules: () => ipcRenderer.invoke("show-exam-rules"),
 });
