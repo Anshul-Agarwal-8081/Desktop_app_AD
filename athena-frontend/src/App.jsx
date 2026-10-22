@@ -5,18 +5,67 @@ import "./App.css";
 const exam = {
   title: "Application Development",
   subtitle: "End-Semester Assessment",
-  date: "Scheduled Assessment",
   duration: "60 minutes",
   questions: "As per exam paper",
+  date: "Scheduled Assessment",
   mode: "Online Assessment",
 };
 
+const examInstructions = [
+  "Read every question carefully before answering.",
+  "Do not switch tabs or leave the exam environment during the assessment.",
+  "Do not copy or paste unless explicitly permitted.",
+  "Ensure your system is ready before you begin.",
+  "Follow your institution's examination rules.",
+];
+
 function App() {
+  const [studentName, setStudentName] = useState("");
+  const [studentId, setStudentId] = useState("");
+
+  const [errors, setErrors] = useState({});
+  const [showInstructions, setShowInstructions] = useState(false);
   const [starting, setStarting] = useState(false);
   const [started, setStarted] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleStartExam() {
+  function validateStudent() {
+    const nextErrors = {};
+    const name = studentName.trim();
+    const id = studentId.trim();
+
+    if (!name) {
+      nextErrors.studentName = "Please enter your full name.";
+    } else if (name.length < 2 || name.length > 80) {
+      nextErrors.studentName =
+        "Name must be between 2 and 80 characters.";
+    } else if (!/^[\p{L}\p{M}][\p{L}\p{M}\s'.-]*$/u.test(name)) {
+      nextErrors.studentName =
+        "Enter a valid name using letters and spaces.";
+    }
+
+    if (!id) {
+      nextErrors.studentId = "Please enter your student ID.";
+    } else if (!/^[a-zA-Z0-9_-]{3,20}$/.test(id)) {
+      nextErrors.studentId =
+        "Use 3–20 letters, numbers, hyphens or underscores.";
+    }
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function handleStartClick() {
+    setError("");
+
+    if (!validateStudent()) {
+      return;
+    }
+
+    setShowInstructions(true);
+  }
+
+  async function confirmAndStartExam() {
     if (starting || started) return;
 
     setStarting(true);
@@ -26,25 +75,24 @@ function App() {
       const api = window.electronAPI;
 
       if (!api) {
-        throw new Error("Athena's Electron bridge is unavailable.");
+        throw new Error(
+          "Electron API is unavailable. Restart the desktop application."
+        );
       }
 
-      // Show the existing exam rules dialog.
-      const rulesResult = await api.showExamRules();
-
-      // If the dialog has a Cancel/Back option, do not start.
-      if (
-        rulesResult &&
-        typeof rulesResult.response === "number" &&
-        rulesResult.response !== 0
-      ) {
-        return;
+      if (typeof api.setFullScreen !== "function") {
+        throw new Error("The fullscreen API is missing from preload.");
       }
 
-      // Use the existing Electron methods.
+      if (typeof api.startTest !== "function") {
+        throw new Error("The exam-start API is missing from preload.");
+      }
+
+      // Start the existing Electron exam flow only after confirmation.
       await api.setFullScreen();
       await api.startTest();
 
+      setShowInstructions(false);
       setStarted(true);
     } catch (err) {
       console.error("Unable to start exam:", err);
@@ -74,7 +122,9 @@ function App() {
             Secure Environment
           </span>
 
-          <div className="header-avatar">S</div>
+          <div className="header-avatar">
+            {studentName.trim().charAt(0).toUpperCase() || "S"}
+          </div>
         </div>
       </header>
 
@@ -82,10 +132,15 @@ function App() {
         <section className="welcome-section">
           <div>
             <p className="eyebrow">STUDENT DASHBOARD</p>
-            <h1>Welcome back, Student.</h1>
+            <h1>
+              Welcome{studentName.trim()
+                ? `, ${studentName.trim().split(/\s+/)[0]}`
+                : " to Athena"}.
+            </h1>
+
             <p className="welcome-description">
-              Everything is ready for your assessment. Review the details
-              below before you begin.
+              Enter your student details, review your assessment,
+              and make sure you are ready before beginning.
             </p>
           </div>
 
@@ -95,26 +150,95 @@ function App() {
           </div>
         </section>
 
+        {/* Student details */}
         <section className="student-card">
-          <div className="student-avatar">S</div>
-
-          <div className="student-info">
-            <span className="field-label">CANDIDATE</span>
-            <h2>Student Name</h2>
-            <p>Student ID: Not provided</p>
+          <div className="student-avatar">
+            {studentName.trim().charAt(0).toUpperCase() || "S"}
           </div>
 
-          <div className="student-divider" />
+          <div className="student-form">
+            <div className="student-form-heading">
+              <span className="field-label">STUDENT INFORMATION</span>
+              <span className="required-note">* Required fields</span>
+            </div>
 
-          <div className="student-meta">
-            <span className="field-label">PLATFORM</span>
-            <strong>Athena Examination System</strong>
-            <span className="meta-secondary">
-              Electron Desktop Application
-            </span>
+            <div className="student-fields">
+              <div className="form-field">
+                <label htmlFor="studentName">
+                  Student name <span>*</span>
+                </label>
+
+                <input
+                  id="studentName"
+                  name="studentName"
+                  type="text"
+                  placeholder="Enter your full name"
+                  autoComplete="name"
+                  value={studentName}
+                  maxLength={80}
+                  disabled={started}
+                  aria-invalid={Boolean(errors.studentName)}
+                  aria-describedby={
+                    errors.studentName ? "studentNameError" : undefined
+                  }
+                  onChange={(event) => {
+                    setStudentName(event.target.value);
+                    setErrors((previous) => ({
+                      ...previous,
+                      studentName: "",
+                    }));
+                  }}
+                />
+
+                {errors.studentName && (
+                  <p className="field-error" id="studentNameError">
+                    {errors.studentName}
+                  </p>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="studentId">
+                  Student ID <span>*</span>
+                </label>
+
+                <input
+                  id="studentId"
+                  name="studentId"
+                  type="text"
+                  placeholder="e.g. STU2026001"
+                  autoComplete="off"
+                  value={studentId}
+                  maxLength={20}
+                  disabled={started}
+                  aria-invalid={Boolean(errors.studentId)}
+                  aria-describedby={
+                    errors.studentId ? "studentIdError" : undefined
+                  }
+                  onChange={(event) => {
+                    setStudentId(event.target.value);
+                    setErrors((previous) => ({
+                      ...previous,
+                      studentId: "",
+                    }));
+                  }}
+                />
+
+                {errors.studentId && (
+                  <p className="field-error" id="studentIdError">
+                    {errors.studentId}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <p className="student-help">
+              Use the name and ID registered with your institution.
+            </p>
           </div>
         </section>
 
+        {/* Exam overview */}
         <section className="exam-section">
           <div className="section-heading">
             <div>
@@ -135,6 +259,7 @@ function App() {
                 <span className="exam-category">
                   ACADEMIC ASSESSMENT
                 </span>
+
                 <h3>{exam.title}</h3>
                 <p>{exam.subtitle}</p>
               </div>
@@ -183,8 +308,8 @@ function App() {
               <div>
                 <strong>Before you begin</strong>
                 <p>
-                  Ensure you are ready to complete your assessment.
-                  Read the exam rules carefully before proceeding.
+                  Verify your student details and review the
+                  instructions before starting your assessment.
                 </p>
               </div>
             </div>
@@ -198,18 +323,14 @@ function App() {
             <button
               className="start-button"
               type="button"
-              onClick={handleStartExam}
+              onClick={handleStartClick}
               disabled={starting || started}
             >
               <span>
-                {starting
-                  ? "Preparing your exam..."
-                  : started
-                    ? "Exam started"
-                    : "Start Exam"}
+                {started ? "Exam Started" : "Start Exam"}
               </span>
 
-              {!starting && !started && (
+              {!started && (
                 <span className="button-arrow">→</span>
               )}
             </button>
@@ -217,8 +338,8 @@ function App() {
             <p className="button-caption">
               <span className="lock-symbol">♢</span>
               {started
-                ? "Your exam session has started."
-                : "Your assessment will begin after you review the rules."}
+                ? `Session: ${studentId.trim()}`
+                : "Your exam begins after you confirm the instructions."}
             </p>
           </article>
         </section>
@@ -228,6 +349,98 @@ function App() {
           <span>Designed for focused, secure assessments</span>
         </footer>
       </main>
+
+      {/* Exam instructions modal */}
+      {showInstructions && (
+        <div
+          className="modal-overlay"
+          onClick={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !starting
+            ) {
+              setShowInstructions(false);
+              setError("");
+            }
+          }}
+        >
+          <section
+            className="instructions-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="instructionsTitle"
+          >
+            <div className="modal-icon">!</div>
+
+            <p className="eyebrow">PLEASE READ CAREFULLY</p>
+            <h2 id="instructionsTitle">Exam Instructions</h2>
+
+            <p className="modal-description">
+              Please verify your details and review these rules
+              before entering the assessment.
+            </p>
+
+            <div className="candidate-summary">
+              <div>
+                <span className="field-label">STUDENT NAME</span>
+                <strong>{studentName.trim()}</strong>
+              </div>
+
+              <div>
+                <span className="field-label">STUDENT ID</span>
+                <strong>{studentId.trim()}</strong>
+              </div>
+            </div>
+
+            <ol className="instructions-list">
+              {examInstructions.map((instruction, index) => (
+                <li key={instruction}>
+                  <span className="instruction-number">
+                    {index + 1}
+                  </span>
+                  <span>{instruction}</span>
+                </li>
+              ))}
+            </ol>
+
+            {error && (
+              <div className="error-message" role="alert">
+                {error}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="cancel-button"
+                disabled={starting}
+                onClick={() => {
+                  setShowInstructions(false);
+                  setError("");
+                }}
+              >
+                Go Back
+              </button>
+
+              <button
+                type="button"
+                className="confirm-button"
+                disabled={starting}
+                onClick={confirmAndStartExam}
+              >
+                {starting
+                  ? "Starting..."
+                  : "I Understand & Start Exam"}
+              </button>
+            </div>
+
+            <p className="modal-footnote">
+              By continuing, you confirm that your details are correct
+              and you are ready to begin.
+            </p>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

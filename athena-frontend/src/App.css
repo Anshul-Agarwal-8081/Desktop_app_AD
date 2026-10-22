@@ -678,3 +678,339 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Student information form */
+
+.student-card {
+  align-items: flex-start;
+}
+
+.student-form {
+  flex: 1;
+  min-width: 0;
+}
+
+.student-form-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.student-form-heading .field-label {
+  margin: 0;
+}
+
+.required-note {
+  color: #929db0;
+  font-size: 10px;
+}
+
+.student-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.form-field {
+  min-width: 0;
+}
+
+.form-field label {
+  display: block;
+  margin-bottom: 8px;
+  color: #35445d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.form-field label span {
+  color: #d94848;
+}
+
+.form-field input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 13px;
+  border: 1px solid #dfe5ef;
+  border-radius: 9px;
+  outline: none;
+  background: #fbfcfe;
+  color: #17243b;
+  font: inherit;
+  font-size: 12px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.form-field input::placeholder {
+  color: #a0aabc;
+}
+
+.form-field input:focus {
+  border-color: #5277f0;
+  box-shadow: 0 0 0 3px rgba(49, 94, 234, 0.1);
+  background: #ffffff;
+}
+
+.form-field input[aria-invalid="true"] {
+  border-color: #e25c5c;
+  background: #fffafa;
+}
+
+.form-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.student-help {
+  margin: 13px 0 0;
+  color: #8995a8;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.field-error {
+  margin: 7px 0 0;
+  color: #c73535;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Exam instructions dialog */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 24px;
+  background: rgba(11, 23, 43, 0.62);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.instructions-modal {
+  width: min(100%, 530px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 25px 90px rgba(6, 18, 40, 0.28);
+  animation: modal-enter 180ms ease-out;
+}
+
+.modal-icon {
+  display: grid;
+  place-items: center;
+  width: 45px;
+  height: 45px;
+  margin-bottom: 20px;
+  border: 1px solid #dce6ff;
+  border-radius: 14px;
+  background: #eef3ff;
+  color: #315eea;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.instructions-modal h2 {
+  margin: 0;
+  color: #142746;
+  font-size: 25px;
+  letter-spacing: -0.7px;
+}
+
+.modal-description {
+  margin: 12px 0 22px;
+  color: #748198;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.candidate-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e6eaf1;
+  border-radius: 12px;
+  background: #f8faff;
+}
+
+.candidate-summary .field-label {
+  margin-bottom: 7px;
+}
+
+.candidate-summary strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #243550;
+  font-size: 12px;
+}
+
+.instructions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 24px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.instructions-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: #4e5d74;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.instruction-number {
+  display: grid;
+  place-items: center;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  border-radius: 8px;
+  background: #eef3ff;
+  color: #315eea;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.cancel-button,
+.confirm-button {
+  min-height: 46px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.cancel-button {
+  flex: 0 0 auto;
+  border: 1px solid #dfe5ef;
+  background: #ffffff;
+  color: #52617a;
+}
+
+.cancel-button:hover:not(:disabled) {
+  background: #f5f7fb;
+}
+
+.confirm-button {
+  flex: 1;
+  border: 1px solid #315eea;
+  background: #315eea;
+  color: #ffffff;
+}
+
+.confirm-button:hover:not(:disabled) {
+  border-color: #244bd0;
+  background: #244bd0;
+}
+
+.cancel-button:disabled,
+.confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.cancel-button:focus-visible,
+.confirm-button:focus-visible {
+  outline: 3px solid #a9bcff;
+  outline-offset: 3px;
+}
+
+.modal-footnote {
+  margin: 16px 0 0;
+  color: #929db0;
+  font-size: 10px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Responsive form and dialog */
+
+@media (max-width: 650px) {
+  .student-card {
+    align-items: flex-start;
+  }
+
+  .student-avatar {
+    display: none;
+  }
+
+  .student-form {
+    flex-basis: 100%;
+  }
+
+  .student-fields {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+
+  .instructions-modal {
+    padding: 23px;
+    border-radius: 16px;
+  }
+
+  .instructions-modal h2 {
+    font-size: 22px;
+  }
+
+  .modal-overlay {
+    padding: 14px;
+  }
+
+  .candidate-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .cancel-button,
+  .confirm-button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instructions-modal {
+    animation: none;
+  }
+}
