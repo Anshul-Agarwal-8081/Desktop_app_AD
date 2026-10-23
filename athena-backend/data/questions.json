@@ -1,0 +1,36 @@
+
+[
+  {
+    "id": "q1",
+    "text": "Which technology is used to build server-side applications with JavaScript?",
+    "options": [
+      "React",
+      "Node.js",
+      "CSS",
+      "HTML"
+    ],
+    "marks": 1
+  },
+  {
+    "id": "q2",
+    "text": "Which HTTP method is commonly used to retrieve data?",
+    "options": [
+      "POST",
+      "DELETE",
+      "GET",
+      "PATCH"
+    ],
+    "marks": 1
+  },
+  {
+    "id": "q3",
+    "text": "Which format is commonly used to exchange structured data in a web API?",
+    "options": [
+      "JSON",
+      "MP3",
+      "PNG",
+      "EXE"
+    ],
+    "marks": 1
+  }
+]
