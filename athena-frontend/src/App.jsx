@@ -1,17 +1,10 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
-const exam = {
-  title: "Application Development",
-  subtitle: "End-Semester Assessment",
-  duration: "60 minutes",
-  questions: "As per exam paper",
-  date: "Scheduled Assessment",
-  mode: "Online Assessment",
-};
+const API_URL = "http://localhost:6001";
 
-const examInstructions = [
+const INSTRUCTIONS = [
   "Read every question carefully before answering.",
   "Do not switch tabs or leave the exam environment during the assessment.",
   "Do not copy or paste unless explicitly permitted.",
@@ -19,54 +12,89 @@ const examInstructions = [
   "Follow your institution's examination rules.",
 ];
 
-function App() {
+async function apiRequest(endpoint, options = {}) {
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "The API request failed.");
+  }
+
+  return data;
+}
+
+function formatTime(milliseconds) {
+  const totalSeconds = Math.ceil(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(
+    seconds
+  ).padStart(2, "0")}`;
+}
+
+export default function App() {
   const [studentName, setStudentName] = useState("");
   const [studentId, setStudentId] = useState("");
 
-  const [errors, setErrors] = useState({});
   const [showInstructions, setShowInstructions] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [started, setStarted] = useState(false);
+  const [starting, setStarting] = useState(false);
+
   const [error, setError] = useState("");
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const [loadingQuestions, setLoadingQuestions] = useState(false);
+
+  const [remainingMs, setRemainingMs] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [finished, setFinished] = useState(false);
 
   function validateStudent() {
-    const nextErrors = {};
     const name = studentName.trim();
     const id = studentId.trim();
 
-    if (!name) {
-      nextErrors.studentName = "Please enter your full name.";
-    } else if (name.length < 2 || name.length > 80) {
-      nextErrors.studentName =
-        "Name must be between 2 and 80 characters.";
-    } else if (!/^[\p{L}\p{M}][\p{L}\p{M}\s'.-]*$/u.test(name)) {
-      nextErrors.studentName =
-        "Enter a valid name using letters and spaces.";
+    if (name.length < 2 || name.length > 80) {
+      return "Student name must be between 2 and 80 characters.";
     }
 
-    if (!id) {
-      nextErrors.studentId = "Please enter your student ID.";
-    } else if (!/^[a-zA-Z0-9_-]{3,20}$/.test(id)) {
-      nextErrors.studentId =
-        "Use 3–20 letters, numbers, hyphens or underscores.";
+    if (!/^[a-zA-Z0-9_-]{3,20}$/.test(id)) {
+      return "Student ID must contain 3-20 letters, numbers, hyphens or underscores.";
     }
 
-    setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    return "";
   }
 
-  function handleStartClick() {
-    setError("");
+  async function openInstructions(event) {
+    event?.preventDefault();
 
-    if (!validateStudent()) {
+    const validationError = validateStudent();
+
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
+    setError("");
     setShowInstructions(true);
   }
 
   async function confirmAndStartExam() {
     if (starting || started) return;
+
+    const validationError = validateStudent();
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
 
     setStarting(true);
     setError("");
@@ -74,245 +102,322 @@ function App() {
     try {
       const api = window.electronAPI;
 
-      if (!api) {
-        throw new Error(
-          "Electron API is unavailable. Restart the desktop application."
-        );
+      if (typeof api?.setFullScreen !== "function") {
+        throw new Error("Fullscreen API missing. Check preload.cjs.");
       }
 
-      if (typeof api.setFullScreen !== "function") {
-        throw new Error("The fullscreen API is missing from preload.");
+      if (typeof api?.startTest !== "function") {
+        throw new Error("Start Exam API missing. Check preload.cjs.");
       }
 
-      if (typeof api.startTest !== "function") {
-        throw new Error("The exam-start API is missing from preload.");
+      // Fetch questions without answer keys.
+      setLoadingQuestions(true);
+
+      const questionData = await apiRequest("/api/questions");
+
+      if (!Array.isArray(questionData.questions) ||
+          questionData.questions.length === 0) {
+        throw new Error("No exam questions are available.");
       }
 
-      // Start the existing Electron exam flow only after confirmation.
+      // Create the backend session before starting the timer.
+      const sessionResult = await apiRequest("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          studentName: studentName.trim(),
+          studentId: studentId.trim(),
+        }),
+      });
+
+      // Start Electron's timer.
       await api.setFullScreen();
-      await api.startTest();
 
+      const result = await api.startTest({
+        studentName: studentName.trim(),
+        studentId: studentId.trim(),
+      });
+
+      if (!result?.success) {
+        throw new Error("The exam could not be started.");
+      }
+
+      setQuestions(questionData.questions);
+      setSessionId(sessionResult.session.id);
+      setRemainingMs(Math.max(0, result.endTime - Date.now()));
+      setAnswers({});
+      setFinished(false);
       setShowInstructions(false);
       setStarted(true);
+      setError("");
     } catch (err) {
-      console.error("Unable to start exam:", err);
-      setError(
-        err?.message || "Unable to start the exam. Please try again."
-      );
+      console.error("Exam startup failed:", err);
+      setError(err.message || "Unable to start the exam.");
     } finally {
       setStarting(false);
+      setLoadingQuestions(false);
     }
   }
 
+  async function selectAnswer(questionId, option) {
+    if (!started || finished) return;
+
+    const updatedAnswers = {
+      ...answers,
+      [questionId]: option,
+    };
+
+    setAnswers(updatedAnswers);
+
+    // Save the answer to the backend session.
+    if (sessionId) {
+      try {
+        await apiRequest(`/api/sessions/${sessionId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            answers: { [questionId]: option },
+          }),
+        });
+      } catch (err) {
+        console.error("Could not save answer:", err);
+        setError("Your answer may not have been saved. Please retry.");
+      }
+    }
+  }
+
+  async function finishExam() {
+    if (!started || finished) return;
+
+    setFinished(true);
+    setStarted(false);
+
+    try {
+      if (sessionId) {
+        await apiRequest(`/api/sessions/${sessionId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "completed" }),
+        });
+      }
+    } catch (err) {
+      console.error("Could not complete session:", err);
+      setError("The exam ended, but the session update failed.");
+    }
+  }
+
+  // Poll the authoritative timer in Electron.
+  useEffect(() => {
+    if (!started) return;
+
+    let intervalId;
+    let cancelled = false;
+
+    async function updateTime() {
+      try {
+        const result =
+          await window.electronAPI.getRemainingTime();
+
+        if (cancelled) return;
+
+        setRemainingMs(result.remainingMs);
+
+        if (!result.started || result.remainingMs <= 0) {
+          window.clearInterval(intervalId);
+          await finishExam();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Timer update failed:", err);
+          setError("Unable to retrieve the exam timer.");
+        }
+      }
+    }
+
+    updateTime();
+    intervalId = window.setInterval(updateTime, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [started]);
+
+  const answeredCount = Object.keys(answers).length;
+
   return (
-    <div className="athena-app">
-      <header className="topbar">
+    <main className="app-shell">
+      <header className="app-header">
         <div className="brand">
           <div className="brand-mark">A</div>
-
-          <div className="brand-copy">
-            <span className="brand-name">ATHENA</span>
-            <span className="brand-caption">ASSESSMENT PORTAL</span>
+          <div>
+            <h1>ATHENA</h1>
+            <p>Examination System</p>
           </div>
         </div>
-
-        <div className="header-right">
-          <span className="secure-indicator">
-            <span className="status-dot" />
-            Secure Environment
-          </span>
-
-          <div className="header-avatar">
-            {studentName.trim().charAt(0).toUpperCase() || "S"}
-          </div>
-        </div>
+        <span className="secure-label">
+          <span className="status-dot" />
+          Assessment Portal
+        </span>
       </header>
 
-      <main className="dashboard">
-        <section className="welcome-section">
-          <div>
-            <p className="eyebrow">STUDENT DASHBOARD</p>
-            <h1>
-              Welcome{studentName.trim()
-                ? `, ${studentName.trim().split(/\s+/)[0]}`
-                : " to Athena"}.
-            </h1>
-
-            <p className="welcome-description">
-              Enter your student details, review your assessment,
-              and make sure you are ready before beginning.
+      <section className="page-content">
+        {!started && !finished && (
+          <div className="welcome-heading">
+            <span className="eyebrow">STUDENT PORTAL</span>
+            <h2>Ready to demonstrate your knowledge?</h2>
+            <p>
+              Verify your details and review the exam instructions
+              before entering your assessment.
             </p>
           </div>
+        )}
 
-          <div className="session-badge">
-            <span className="session-dot" />
-            Exam session
-          </div>
-        </section>
-
-        {/* Student details */}
-        <section className="student-card">
-          <div className="student-avatar">
-            {studentName.trim().charAt(0).toUpperCase() || "S"}
-          </div>
-
-          <div className="student-form">
-            <div className="student-form-heading">
-              <span className="field-label">STUDENT INFORMATION</span>
-              <span className="required-note">* Required fields</span>
-            </div>
-
-            <div className="student-fields">
-              <div className="form-field">
-                <label htmlFor="studentName">
-                  Student name <span>*</span>
-                </label>
-
-                <input
-                  id="studentName"
-                  name="studentName"
-                  type="text"
-                  placeholder="Enter your full name"
-                  autoComplete="name"
-                  value={studentName}
-                  maxLength={80}
-                  disabled={started}
-                  aria-invalid={Boolean(errors.studentName)}
-                  aria-describedby={
-                    errors.studentName ? "studentNameError" : undefined
-                  }
-                  onChange={(event) => {
-                    setStudentName(event.target.value);
-                    setErrors((previous) => ({
-                      ...previous,
-                      studentName: "",
-                    }));
-                  }}
-                />
-
-                {errors.studentName && (
-                  <p className="field-error" id="studentNameError">
-                    {errors.studentName}
-                  </p>
-                )}
-              </div>
-
-              <div className="form-field">
-                <label htmlFor="studentId">
-                  Student ID <span>*</span>
-                </label>
-
-                <input
-                  id="studentId"
-                  name="studentId"
-                  type="text"
-                  placeholder="e.g. STU2026001"
-                  autoComplete="off"
-                  value={studentId}
-                  maxLength={20}
-                  disabled={started}
-                  aria-invalid={Boolean(errors.studentId)}
-                  aria-describedby={
-                    errors.studentId ? "studentIdError" : undefined
-                  }
-                  onChange={(event) => {
-                    setStudentId(event.target.value);
-                    setErrors((previous) => ({
-                      ...previous,
-                      studentId: "",
-                    }));
-                  }}
-                />
-
-                {errors.studentId && (
-                  <p className="field-error" id="studentIdError">
-                    {errors.studentId}
-                  </p>
-                )}
+        {!started && !finished && (
+          <section className="exam-card">
+            <div className="exam-title-row">
+              <div className="subject-icon">ED</div>
+              <div>
+                <span className="eyebrow">ASSESSMENT</span>
+                <h2>Application Development</h2>
+                <p>End-Semester Assessment</p>
               </div>
             </div>
-
-            <p className="student-help">
-              Use the name and ID registered with your institution.
-            </p>
-          </div>
-        </section>
-
-        {/* Exam overview */}
-        <section className="exam-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">YOUR ASSESSMENT</p>
-              <h2>Exam overview</h2>
-            </div>
-
-            <span className="upcoming-badge">
-              {started ? "In progress" : "Ready to begin"}
-            </span>
-          </div>
-
-          <article className="exam-card">
-            <div className="exam-card-top">
-              <div className="exam-icon">ED</div>
-
-              <div className="exam-title-group">
-                <span className="exam-category">
-                  ACADEMIC ASSESSMENT
-                </span>
-
-                <h3>{exam.title}</h3>
-                <p>{exam.subtitle}</p>
-              </div>
-            </div>
-
-            <div className="exam-divider" />
 
             <div className="exam-details">
               <div className="detail-item">
-                <div className="detail-icon">◷</div>
+                <span className="detail-icon">◷</span>
                 <div>
-                  <span className="field-label">DURATION</span>
-                  <strong>{exam.duration}</strong>
+                  <span className="detail-label">DURATION</span>
+                  <strong>60 minutes</strong>
                 </div>
               </div>
-
               <div className="detail-item">
-                <div className="detail-icon">▤</div>
+                <span className="detail-icon">▤</span>
                 <div>
-                  <span className="field-label">QUESTIONS</span>
-                  <strong>{exam.questions}</strong>
+                  <span className="detail-label">QUESTIONS</span>
+                  <strong>Available MCQs</strong>
                 </div>
               </div>
-
               <div className="detail-item">
-                <div className="detail-icon">▣</div>
+                <span className="detail-icon">▣</span>
                 <div>
-                  <span className="field-label">EXAM DATE</span>
-                  <strong>{exam.date}</strong>
+                  <span className="detail-label">EXAM DATE</span>
+                  <strong>Scheduled Assessment</strong>
                 </div>
               </div>
-
               <div className="detail-item">
-                <div className="detail-icon">⌘</div>
+                <span className="detail-icon">⌘</span>
                 <div>
-                  <span className="field-label">MODE</span>
-                  <strong>{exam.mode}</strong>
+                  <span className="detail-label">MODE</span>
+                  <strong>Online Assessment</strong>
                 </div>
               </div>
             </div>
 
-            <div className="exam-divider" />
+            <form
+              className="student-form"
+              onSubmit={openInstructions}
+            >
+              <h3>Student details</h3>
+              <p>Enter your details to continue.</p>
 
-            <div className="exam-notice">
-              <div className="notice-icon">i</div>
+              <label htmlFor="studentName">Student name</label>
+              <input
+                id="studentName"
+                value={studentName}
+                onChange={(event) => setStudentName(event.target.value)}
+                placeholder="Enter your full name"
+                maxLength={80}
+                autoComplete="name"
+                required
+              />
+
+              <label htmlFor="studentId">Student ID</label>
+              <input
+                id="studentId"
+                value={studentId}
+                onChange={(event) => setStudentId(event.target.value)}
+                placeholder="Enter your student ID"
+                maxLength={20}
+                autoComplete="off"
+                required
+              />
+
+              {error && (
+                <div className="error-message" role="alert">
+                  {error}
+                </div>
+              )}
+
+              <div className="notice">
+                <span className="notice-icon">i</span>
+                <div>
+                  <strong>Before you begin</strong>
+                  <p>
+                    Ensure you are ready to complete your assessment.
+                    Read the exam rules carefully before proceeding.
+                  </p>
+                </div>
+              </div>
+
+              <button className="primary-button" type="submit">
+                Review Exam Instructions <span>→</span>
+              </button>
+            </form>
+          </section>
+        )}
+
+        {started && (
+          <section className="exam-card active-exam">
+            <div className="active-exam-header">
               <div>
-                <strong>Before you begin</strong>
+                <span className="eyebrow">ASSESSMENT IN PROGRESS</span>
+                <h2>Application Development</h2>
                 <p>
-                  Verify your student details and review the
-                  instructions before starting your assessment.
+                  {studentName} · {studentId}
                 </p>
               </div>
+              <div className="timer">
+                <span>TIME REMAINING</span>
+                <strong>{formatTime(remainingMs ?? 0)}</strong>
+              </div>
             </div>
+
+            <div className="progress-row">
+              <span>{answeredCount} of {questions.length} answered</span>
+              <span>{questions.length} questions</span>
+            </div>
+
+            {questions.map((question, index) => (
+              <article className="question-card" key={question.id}>
+                <span className="question-number">
+                  QUESTION {index + 1}
+                </span>
+                <h3>{question.question ?? question.text}</h3>
+
+                <div className="options-list">
+                  {question.options.map((option, optionIndex) => (
+                    <label
+                      className={`option ${
+                        answers[question.id] === option
+                          ? "option-selected"
+                          : ""
+                      }`}
+                      key={`${question.id}-${optionIndex}`}
+                    >
+                      <input
+                        type="radio"
+                        name={question.id}
+                        value={option}
+                        checked={answers[question.id] === option}
+                        onChange={() =>
+                          selectAnswer(question.id, option)
+                        }
+                      />
+                      <span>{option}</span>
+                    </label>
+                  ))}
+                </div>
+              </article>
+            ))}
 
             {error && (
               <div className="error-message" role="alert">
@@ -321,84 +426,66 @@ function App() {
             )}
 
             <button
-              className="start-button"
-              type="button"
-              onClick={handleStartClick}
-              disabled={starting || started}
+              className="primary-button"
+              onClick={finishExam}
             >
-              <span>
-                {started ? "Exam Started" : "Start Exam"}
-              </span>
-
-              {!started && (
-                <span className="button-arrow">→</span>
-              )}
+              Submit Exam
             </button>
+          </section>
+        )}
 
-            <p className="button-caption">
-              <span className="lock-symbol">♢</span>
-              {started
-                ? `Session: ${studentId.trim()}`
-                : "Your exam begins after you confirm the instructions."}
+        {finished && (
+          <section className="exam-card completion-card">
+            <div className="completion-icon">✓</div>
+            <span className="eyebrow">ASSESSMENT STATUS</span>
+            <h2>Exam completed</h2>
+            <p>
+              Your assessment session has ended.
+              {` You answered ${answeredCount} of ${questions.length} questions.`}
             </p>
-          </article>
-        </section>
+          </section>
+        )}
+      </section>
 
-        <footer className="dashboard-footer">
-          <span>ATHENA · EXAMINATION SYSTEM</span>
-          <span>Designed for focused, secure assessments</span>
-        </footer>
-      </main>
+      <footer className="app-footer">
+        <span>ATHENA · EXAMINATION SYSTEM</span>
+        <span>Designed for focused assessments</span>
+      </footer>
 
-      {/* Exam instructions modal */}
       {showInstructions && (
-        <div
-          className="modal-overlay"
-          onClick={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              !starting
-            ) {
-              setShowInstructions(false);
-              setError("");
-            }
-          }}
-        >
+        <div className="modal-backdrop">
           <section
             className="instructions-modal"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="instructionsTitle"
+            aria-labelledby="instructions-title"
           >
             <div className="modal-icon">!</div>
-
-            <p className="eyebrow">PLEASE READ CAREFULLY</p>
-            <h2 id="instructionsTitle">Exam Instructions</h2>
-
+            <span className="eyebrow modal-eyebrow">
+              PLEASE READ CAREFULLY
+            </span>
+            <h2 id="instructions-title">Exam Instructions</h2>
             <p className="modal-description">
               Please verify your details and review these rules
               before entering the assessment.
             </p>
 
-            <div className="candidate-summary">
+            <div className="student-summary">
               <div>
-                <span className="field-label">STUDENT NAME</span>
+                <span>STUDENT NAME</span>
                 <strong>{studentName.trim()}</strong>
               </div>
-
               <div>
-                <span className="field-label">STUDENT ID</span>
+                <span>STUDENT ID</span>
                 <strong>{studentId.trim()}</strong>
               </div>
             </div>
 
-            <ol className="instructions-list">
-              {examInstructions.map((instruction, index) => (
+            <ol className="instruction-list">
+              {INSTRUCTIONS.map((instruction, index) => (
                 <li key={instruction}>
-                  <span className="instruction-number">
-                    {index + 1}
-                  </span>
-                  <span>{instruction}</span>
+                  <span>{index + 1}</span>
+                  <p>{instruction}</p>
                 </li>
               ))}
             </ol>
@@ -411,25 +498,23 @@ function App() {
 
             <div className="modal-actions">
               <button
-                type="button"
-                className="cancel-button"
-                disabled={starting}
+                className="secondary-button"
                 onClick={() => {
                   setShowInstructions(false);
                   setError("");
                 }}
+                disabled={starting || loadingQuestions}
               >
                 Go Back
               </button>
 
               <button
-                type="button"
-                className="confirm-button"
-                disabled={starting}
+                className="primary-button"
                 onClick={confirmAndStartExam}
+                disabled={starting || loadingQuestions}
               >
-                {starting
-                  ? "Starting..."
+                {starting || loadingQuestions
+                  ? "Starting Exam..."
                   : "I Understand & Start Exam"}
               </button>
             </div>
@@ -441,8 +526,6 @@ function App() {
           </section>
         </div>
       )}
-    </div>
+    </main>
   );
 }
-
-export default App;

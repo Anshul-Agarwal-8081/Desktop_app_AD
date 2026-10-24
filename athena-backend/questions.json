@@ -1,1 +1,36 @@
-[]
+
+[
+  {
+    "id": "q1",
+    "text": "Which technology runs JavaScript on the server?",
+    "options": [
+      "React",
+      "Node.js",
+      "CSS",
+      "HTML"
+    ],
+    "correctAnswer": "Node.js"
+  },
+  {
+    "id": "q2",
+    "text": "Which HTTP method is commonly used to retrieve data?",
+    "options": [
+      "POST",
+      "DELETE",
+      "GET",
+      "PATCH"
+    ],
+    "correctAnswer": "GET"
+  },
+  {
+    "id": "q3",
+    "text": "Which format is commonly used for structured web API data?",
+    "options": [
+      "MP3",
+      "PNG",
+      "JSON",
+      "EXE"
+    ],
+    "correctAnswer": "JSON"
+  }
+]

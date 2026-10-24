@@ -1,36 +1,24 @@
-
 [
   {
     "id": "q1",
-    "text": "Which technology is used to build server-side applications with JavaScript?",
+    "question": "Which method starts an HTTP server in Node.js?",
     "options": [
-      "React",
-      "Node.js",
-      "CSS",
-      "HTML"
+      "listen()",
+      "start()",
+      "open()",
+      "run()"
     ],
-    "marks": 1
+    "answer": "listen()"
   },
   {
     "id": "q2",
-    "text": "Which HTTP method is commonly used to retrieve data?",
+    "question": "Which module provides file system operations in Node.js?",
     "options": [
-      "POST",
-      "DELETE",
-      "GET",
-      "PATCH"
+      "http",
+      "fs",
+      "path",
+      "crypto"
     ],
-    "marks": 1
-  },
-  {
-    "id": "q3",
-    "text": "Which format is commonly used to exchange structured data in a web API?",
-    "options": [
-      "JSON",
-      "MP3",
-      "PNG",
-      "EXE"
-    ],
-    "marks": 1
+    "answer": "fs"
   }
 ]
