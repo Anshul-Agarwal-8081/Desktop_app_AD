@@ -1,24 +1,21 @@
+
 [
   {
     "id": "q1",
-    "question": "Which method starts an HTTP server in Node.js?",
-    "options": [
-      "listen()",
-      "start()",
-      "open()",
-      "run()"
-    ],
-    "answer": "listen()"
+    "text": "Which technology runs JavaScript on the server?",
+    "options": ["React", "Node.js", "CSS", "HTML"],
+    "correctAnswer": "Node.js"
   },
   {
     "id": "q2",
-    "question": "Which module provides file system operations in Node.js?",
-    "options": [
-      "http",
-      "fs",
-      "path",
-      "crypto"
-    ],
-    "answer": "fs"
+    "text": "Which HTTP method is commonly used to retrieve data?",
+    "options": ["POST", "DELETE", "GET", "PATCH"],
+    "correctAnswer": "GET"
+  },
+  {
+    "id": "q3",
+    "text": "Which format is commonly used for structured web API data?",
+    "options": ["MP3", "PNG", "JSON", "EXE"],
+    "correctAnswer": "JSON"
   }
 ]
