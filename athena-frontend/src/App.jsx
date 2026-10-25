@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const API_URL = "http://localhost:6001";
+const API_URL = "http://127.0.0.1:6001";;
 const EXAM_DURATION_SECONDS = 60 * 60;
+const PROCTORING_INTERVAL_MS = 5000;
+
+// --------------------------------------------------
+// Backend helper
+// --------------------------------------------------
 
 async function apiRequest(endpoint, options = {}) {
   let response;
@@ -31,45 +37,62 @@ async function apiRequest(endpoint, options = {}) {
 }
 
 function formatTime(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
 
   return `${String(minutes).padStart(2, "0")}:${String(
     remainingSeconds
   ).padStart(2, "0")}`;
 }
 
-function CameraPreview() {
-  const videoRef = useRef(null);
-  const [cameraError, setCameraError] = useState("");
+// --------------------------------------------------
+// Camera preview
+// Uses the shared stream created by App.
+// It does NOT request a second camera stream.
+// --------------------------------------------------
+
+function CameraPreview({ stream, videoRef, cameraError }) {
   const [cameraReady, setCameraReady] = useState(false);
 
   useEffect(() => {
-    let stream;
+    const video = videoRef.current;
 
-    async function startCamera() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
-          setCameraReady(true);
-        }
-      } catch {
-        setCameraError("Camera permission is unavailable.");
-      }
+    if (!video || !stream) {
+      setCameraReady(false);
+      return;
     }
 
-    startCamera();
+    let active = true;
+
+    video.srcObject = stream;
+
+    const handleLoaded = () => {
+      if (active) setCameraReady(true);
+    };
+
+    video.addEventListener("loadeddata", handleLoaded);
+
+    video.play().then(
+      () => {
+        if (active) setCameraReady(true);
+      },
+      () => {
+        if (active) {
+          setCameraReady(false);
+        }
+      }
+    );
 
     return () => {
-      stream?.getTracks().forEach((track) => track.stop());
+      active = false;
+      video.removeEventListener("loadeddata", handleLoaded);
+
+      if (video.srcObject === stream) {
+        video.srcObject = null;
+      }
     };
-  }, []);
+  }, [stream, videoRef]);
 
   return (
     <div className="camera-card">
@@ -80,21 +103,37 @@ function CameraPreview() {
 
         {!cameraReady && (
           <div className="camera-overlay">
-            {cameraError || "Starting camera…"}
+            {cameraError ||
+              (stream ? "Connecting to camera…" : "Camera permission required")}
           </div>
         )}
       </div>
 
       <div className="camera-status">
-        <span className={cameraReady ? "status-dot active" : "status-dot"} />
-        {cameraReady ? "Camera active" : "Camera not ready"}
+        <span
+          className={
+            cameraReady && stream
+              ? "status-dot active"
+              : "status-dot"
+          }
+        />
+        {cameraError
+          ? "Camera unavailable"
+          : cameraReady && stream
+            ? "Camera active"
+            : "Camera not ready"}
       </div>
     </div>
   );
 }
 
+// --------------------------------------------------
+// Main application
+// --------------------------------------------------
+
 export default function App() {
   const [screen, setScreen] = useState("welcome");
+
   const [studentName, setStudentName] = useState("");
   const [studentId, setStudentId] = useState("");
 
@@ -106,54 +145,148 @@ export default function App() {
   const [remainingSeconds, setRemainingSeconds] = useState(
     EXAM_DURATION_SECONDS
   );
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submittedResult, setSubmittedResult] = useState(null);
 
-  const answerQueue = useRef(Promise.resolve());
-  const answersRef = useRef({});
-  const sessionIdRef = useRef("");
-  const submittedRef = useRef(false);
+  // Camera state
+  const [cameraStream, setCameraStream] = useState(null);
+  const [cameraError, setCameraError] = useState("");
+
+  // Exam/proctoring state
+  const [started, setStarted] = useState(false);
+  const [proctoringStatus, setProctoringStatus] = useState("idle");
+
+  // Refs used by answer saving and camera capture
   const videoRef = useRef(null);
-
-const [started, setStarted] = useState(false);
-const [proctoringStatus, setProctoringStatus] = useState("idle");
-
+  const cameraStreamRef = useRef(null);
+  const sessionIdRef = useRef("");
+  const answersRef = useRef({});
+  const answerQueue = useRef(Promise.resolve());
+  const submittedRef = useRef(false);
   const saveErrors = useRef({});
+  const finishingRef = useRef(false);
 
+  // --------------------------------------------------
+  // Stop camera tracks and release camera resources
+  // --------------------------------------------------
 
+  const stopCamera = useCallback(() => {
+    const stream = cameraStreamRef.current;
 
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
 
-
-
+    cameraStreamRef.current = null;
+    setCameraStream(null);
+    setCameraError("");
+  }, []);
 
   useEffect(() => {
-    if (screen !== "exam") return;
+    return () => {
+      cameraStreamRef.current
+        ?.getTracks()
+        .forEach((track) => track.stop());
+    };
+  }, []);
+
+  // --------------------------------------------------
+  // Exam timer
+  // --------------------------------------------------
+
+  useEffect(() => {
+    if (screen !== "exam" || !started) return;
 
     const timer = setInterval(() => {
-      setRemainingSeconds((previous) => {
-        if (previous <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-
-        return previous - 1;
-      });
+      setRemainingSeconds((previous) => Math.max(0, previous - 1));
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [screen]);
+  }, [screen, started]);
+
+  // --------------------------------------------------
+  // Finish automatically when time runs out
+  // --------------------------------------------------
+
+  const finishExam = useCallback(async () => {
+    if (
+      finishingRef.current ||
+      submittedRef.current ||
+      !sessionIdRef.current
+    ) {
+      return;
+    }
+
+    finishingRef.current = true;
+    submittedRef.current = true;
+    setLoading(true);
+    setError("");
+
+    try {
+      // Wait for pending answer saves before submitting.
+      await answerQueue.current;
+
+      if (Object.keys(saveErrors.current).length > 0) {
+        throw new Error(
+          "Some answers could not be saved. Please retry those answers before submitting."
+        );
+      }
+
+      const result = await apiRequest(
+        `/api/sessions/${encodeURIComponent(sessionIdRef.current)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "completed",
+          }),
+        }
+      );
+
+      setSubmittedResult(result);
+      setScreen("result");
+      setStarted(false);
+
+      try {
+        await window.electronAPI?.cancelTest?.();
+      } catch (electronError) {
+        console.error("Could not exit fullscreen:", electronError);
+      }
+
+      stopCamera();
+    } catch (err) {
+      submittedRef.current = false;
+      finishingRef.current = false;
+
+      setError(`Could not submit the exam: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [stopCamera]);
 
   useEffect(() => {
-    if (screen === "exam" && remainingSeconds === 0) {
+    if (screen === "exam" && started && remainingSeconds === 0) {
       finishExam();
     }
-    // finishExam is intentionally invoked when the timer reaches zero.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remainingSeconds, screen]);
+  }, [screen, started, remainingSeconds, finishExam]);
+
+  // --------------------------------------------------
+  // Start exam
+  //
+  // 1. Validate student details
+  // 2. Request camera access
+  // 3. Show exam rules and require acceptance
+  // 4. Load questions and create backend session
+  // 5. Enable fullscreen
+  // 6. Start Electron's exam timer
+  // --------------------------------------------------
 
   async function beginExam() {
+    if (loading) return;
+
     setError("");
+    setCameraError("");
 
     if (studentName.trim().length < 2) {
       setError("Enter your name to continue.");
@@ -161,25 +294,80 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
     }
 
     if (!/^[a-zA-Z0-9_-]{3,20}$/.test(studentId.trim())) {
-      setError("Student ID must be 3–20 letters, numbers, hyphens or underscores.");
+      setError(
+        "Student ID must be 3–20 letters, numbers, hyphens or underscores."
+      );
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera access is not supported in this environment.");
+      setError("Camera access is unavailable. Check your Electron settings.");
       return;
     }
 
     setLoading(true);
 
+    let newStream = null;
+    let createdSessionId = "";
+    let electronTimerStarted = false;
+
     try {
+      // Step 1: Request camera permission.
+      // The browser/Electron OS permission prompt may appear here.
+      newStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+
+      cameraStreamRef.current = newStream;
+      setCameraStream(newStream);
+      setCameraError("");
+
+      // Step 2: Require the student to accept the rules.
+      if (typeof window.electronAPI?.showExamRules !== "function") {
+        throw new Error(
+          "Exam rules dialog is unavailable. Check electron/preload.cjs."
+        );
+      }
+
+      const rulesAccepted = await window.electronAPI.showExamRules();
+
+      if (!rulesAccepted) {
+        throw new Error(
+          "Exam rules were not accepted. The exam has not started."
+        );
+      }
+
+      // Step 3: Verify required Electron APIs.
+      if (
+        typeof window.electronAPI?.setFullScreen !== "function" ||
+        typeof window.electronAPI?.startTest !== "function"
+      ) {
+        throw new Error(
+          "Electron exam APIs are unavailable. Check preload.cjs and restart the app."
+        );
+      }
+
+      // Step 4: Load questions from the existing backend.
       const questionResponse = await apiRequest("/api/questions");
-      const loadedQuestions = questionResponse.questions || [];
+      const loadedQuestions = Array.isArray(questionResponse)
+        ? questionResponse
+        : questionResponse.questions;
 
-      if (loadedQuestions.length === 0) {
-        throw new Error("No valid questions were found in questions.json.");
+      if (!Array.isArray(loadedQuestions) || loadedQuestions.length === 0) {
+        throw new Error(
+          "No valid questions were found. Check questions.json."
+        );
       }
 
-      // Validate IDs so answers are saved against the actual question IDs.
-      if (loadedQuestions.some((question) => !question.id)) {
-        throw new Error("Every question needs a unique id in questions.json.");
+      if (loadedQuestions.some((question) => question.id == null)) {
+        throw new Error(
+          "Every question must have an id in questions.json."
+        );
       }
 
+      // Step 5: Create the backend session.
       const session = await apiRequest("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
@@ -188,42 +376,115 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
         }),
       });
 
+      createdSessionId = String(session.sessionId ?? session.id ?? "");
+
+      if (!createdSessionId || createdSessionId === "undefined") {
+        throw new Error(
+          "The backend did not return a session ID. Check POST /api/sessions."
+        );
+      }
+
+      // Step 6: Enter fullscreen before starting the exam timer.
+      const fullscreenResult = await window.electronAPI.setFullScreen();
+
+      if (fullscreenResult === false) {
+        throw new Error("Could not enable fullscreen mode.");
+      }
+
+      // Step 7: Start the Electron timer.
+      const startResult = await window.electronAPI.startTest({
+        studentName: studentName.trim(),
+        studentId: studentId.trim(),
+      });
+
+      if (!startResult?.success) {
+        throw new Error("The exam timer could not be started.");
+      }
+
+      electronTimerStarted = true;
+
+      // Initialize exam state only after the startup steps succeed.
       setQuestions(loadedQuestions);
-      setSessionId(session.sessionId);
-      sessionIdRef.current = session.sessionId;
+
+      setSessionId(createdSessionId);
+      sessionIdRef.current = createdSessionId;
 
       setAnswers({});
       answersRef.current = {};
+      saveErrors.current = {};
+      answerQueue.current = Promise.resolve();
+
       submittedRef.current = false;
+      finishingRef.current = false;
+
       setCurrentIndex(0);
       setRemainingSeconds(EXAM_DURATION_SECONDS);
       setSubmittedResult(null);
+      setProctoringStatus("idle");
 
-      if (window.electronAPI?.startTest) {
-        await window.electronAPI.startTest({
-          studentName: studentName.trim(),
-          studentId: studentId.trim(),
-        });
-      }
-
-      if (window.electronAPI?.setFullScreen) {
-        await window.electronAPI.setFullScreen();
-      }
-
+      setStarted(true);
       setScreen("exam");
     } catch (err) {
+      console.error("Could not start exam:", err);
+
+      // If a session was created but startup failed, try to cancel it.
+      if (createdSessionId) {
+        try {
+          await apiRequest(
+            `/api/sessions/${encodeURIComponent(createdSessionId)}`,
+            {
+              method: "PATCH",
+              body: JSON.stringify({ status: "cancelled" }),
+            }
+          );
+        } catch (cancelError) {
+          console.error(
+            "Could not cancel the incomplete backend session:",
+            cancelError
+          );
+        }
+      }
+
+      if (electronTimerStarted) {
+        try {
+          await window.electronAPI?.cancelTest?.();
+        } catch (cancelError) {
+          console.error("Could not reset the exam timer:", cancelError);
+        }
+      }
+
+      stopCamera();
+      setStarted(false);
+      setScreen("welcome");
+      setCameraError(
+        err.name === "NotAllowedError"
+          ? "Camera permission was denied. Allow camera access and try again."
+          : err.name === "NotFoundError"
+            ? "No camera was found. Connect or enable a camera and try again."
+            : ""
+      );
+
       setError(err.message || "Could not start the exam.");
     } finally {
       setLoading(false);
     }
   }
 
+  // --------------------------------------------------
+  // Save a selected answer
+  // --------------------------------------------------
+
   function chooseAnswer(question, selectedAnswer) {
-    if (submittedRef.current || !sessionIdRef.current) return;
+    if (
+      submittedRef.current ||
+      finishingRef.current ||
+      !sessionIdRef.current
+    ) {
+      return;
+    }
 
     const questionId = String(question.id);
 
-    // Update the UI with a neutral selection; no correctness is shown.
     const nextAnswers = {
       ...answersRef.current,
       [questionId]: selectedAnswer,
@@ -233,72 +494,36 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
     setAnswers(nextAnswers);
     setError("");
 
-    // Queue writes so rapid answer changes cannot overwrite each other
-    // out of order.
-  answerQueue.current = answerQueue.current
-  .then(async () => {
-    // Do not skip pending saves when the student clicks Submit.
-    await apiRequest(
-      `/api/sessions/${sessionIdRef.current}/answers/${encodeURIComponent(
-        questionId
-      )}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ selectedAnswer }),
-      }
-    );
+    // Queue requests to preserve the order of rapid answer changes.
+    answerQueue.current = answerQueue.current
+      .then(async () => {
+        await apiRequest(
+          `/api/sessions/${encodeURIComponent(
+            sessionIdRef.current
+          )}/answers/${encodeURIComponent(questionId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ selectedAnswer }),
+          }
+        );
 
-    delete saveErrors.current[questionId];
-  })
-  .catch((err) => {
-    saveErrors.current[questionId] = err.message;
-    setError(`Answer could not be saved: ${err.message}`);
-  });
-}
-
-  async function finishExam() {
-    if (submittedRef.current || !sessionIdRef.current) return;
-
-    submittedRef.current = true;
-    setLoading(true);
-    setError("");
-
-    try {
-      // Wait for all answer saves before asking the backend to grade.
-      await answerQueue.current;
-
-      if (Object.keys(saveErrors.current).length > 0) {
-  throw new Error(
-    "Some answers could not be saved. Please select those answers again before submitting."
-  );
-}
-
-      const result = await apiRequest(
-        `/api/sessions/${sessionIdRef.current}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status: "completed" }),
-        }
-      );
-
-      setSubmittedResult(result);
-      setScreen("result");
-
-      if (window.electronAPI?.cancelTest) {
-        await window.electronAPI.cancelTest();
-      }
-    } catch (err) {
-      // Permit retry if submission failed, for example because the
-      // backend was temporarily unavailable.
-      submittedRef.current = false;
-      setError(`Could not submit the exam: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+        delete saveErrors.current[questionId];
+      })
+      .catch((err) => {
+        saveErrors.current[questionId] = err.message;
+        setError(`Answer could not be saved: ${err.message}`);
+      });
   }
 
+  // --------------------------------------------------
+  // Cancel exam
+  // --------------------------------------------------
+
   async function exitExam() {
+    if (loading) return;
+
     if (!sessionIdRef.current) {
+      stopCamera();
       setScreen("welcome");
       return;
     }
@@ -310,23 +535,41 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
     if (!confirmed) return;
 
     setLoading(true);
+    setError("");
 
     try {
-      await answerQueue.current.catch(() => {});
+      await answerQueue.current;
 
-      await apiRequest(`/api/sessions/${sessionIdRef.current}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "cancelled" }),
-      });
+      await apiRequest(
+        `/api/sessions/${encodeURIComponent(sessionIdRef.current)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "cancelled" }),
+        }
+      );
 
       submittedRef.current = true;
+      finishingRef.current = true;
+      setStarted(false);
 
-      if (window.electronAPI?.cancelTest) {
-        await window.electronAPI.cancelTest();
+      try {
+        await window.electronAPI?.cancelTest?.();
+      } catch (electronError) {
+        console.error("Could not cancel Electron exam:", electronError);
       }
+
+      stopCamera();
 
       setSessionId("");
       sessionIdRef.current = "";
+      setQuestions([]);
+      setAnswers({});
+      answersRef.current = {};
+      saveErrors.current = {};
+      setCurrentIndex(0);
+      setRemainingSeconds(EXAM_DURATION_SECONDS);
+      setProctoringStatus("idle");
+
       setScreen("welcome");
     } catch (err) {
       setError(`Could not cancel the exam: ${err.message}`);
@@ -335,103 +578,135 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
     }
   }
 
+  // --------------------------------------------------
+  // Proctoring: save a JPEG every five seconds
+  // --------------------------------------------------
 
+  useEffect(() => {
+    if (!started || screen !== "exam" || !sessionId) return;
 
-useEffect(() => {
-  if (!started || !sessionId) return;
+    let busy = false;
+    let active = true;
 
-  let busy = false;
-  let intervalId;
+    async function captureAndSave() {
+      if (busy || !active) return;
 
-  const captureAndSave = async () => {
-    if (busy) return;
+      const video = videoRef.current;
 
-    const video = videoRef.current;
-
-    if (
-      !video ||
-      video.readyState < 2 ||
-      video.videoWidth === 0 ||
-      video.videoHeight === 0
-    ) {
-      return;
-    }
-
-    busy = true;
-
-    try {
-      const canvas = document.createElement("canvas");
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      const context = canvas.getContext("2d");
-
-      if (!context) {
-        throw new Error("Could not create canvas context");
+      if (
+        !video ||
+        video.readyState < 2 ||
+        video.videoWidth === 0 ||
+        video.videoHeight === 0
+      ) {
+        return;
       }
 
-      context.drawImage(
-        video,
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
+      if (
+        typeof window.electronAPI?.saveProctoringImage !== "function"
+      ) {
+        setProctoringStatus("error");
+        return;
+      }
 
-      const imageData = canvas.toDataURL(
-        "image/jpeg",
-        0.75
-      );
+      busy = true;
 
-      const result =
-        await window.electronAPI.saveProctoringImage(
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          throw new Error("Could not create canvas context.");
+        }
+
+        context.drawImage(
+          video,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+
+        const imageData = canvas.toDataURL("image/jpeg", 0.75);
+
+        const result = await window.electronAPI.saveProctoringImage(
           sessionId,
           imageData
         );
 
-      if (!result?.success) {
-        throw new Error("Image was not saved");
+        if (!result?.success) {
+          throw new Error("The camera image was not saved.");
+        }
+
+        if (active) setProctoringStatus("saved");
+      } catch (captureError) {
+        console.error("Proctoring image save failed:", captureError);
+
+        if (active) setProctoringStatus("error");
+      } finally {
+        busy = false;
       }
-
-      setProctoringStatus("saved");
-    } catch (error) {
-      console.error("Proctoring image save failed:", error);
-      setProctoringStatus("error");
-    } finally {
-      busy = false;
     }
-  };
 
-  // Capture the first image after the camera is ready,
-  // then capture at five-second intervals.
-  captureAndSave();
+    // Capture once, then repeat at five-second intervals.
+    captureAndSave();
 
-  intervalId = setInterval(captureAndSave, 5000);
+    const intervalId = setInterval(
+      captureAndSave,
+      PROCTORING_INTERVAL_MS
+    );
 
-  return () => {
-    clearInterval(intervalId);
-  };
-}, [started, sessionId]);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, [started, screen, sessionId]);
 
-
+  // --------------------------------------------------
+  // Reset to home
+  // --------------------------------------------------
 
   function resetApp() {
+    stopCamera();
+
     setSessionId("");
     sessionIdRef.current = "";
+
     setQuestions([]);
     setAnswers({});
     answersRef.current = {};
+
+    answerQueue.current = Promise.resolve();
+    saveErrors.current = {};
+
     setSubmittedResult(null);
     setCurrentIndex(0);
     setRemainingSeconds(EXAM_DURATION_SECONDS);
+
     setError("");
+    setCameraError("");
+    setProctoringStatus("idle");
+    setStarted(false);
+
     submittedRef.current = false;
+    finishingRef.current = false;
+
     setScreen("welcome");
   }
 
+  // --------------------------------------------------
+  // Derived values
+  // --------------------------------------------------
+
   const attemptedCount = Object.keys(answers).length;
   const currentQuestion = questions[currentIndex];
+
+  // --------------------------------------------------
+  // Welcome screen
+  // --------------------------------------------------
 
   if (screen === "welcome") {
     return (
@@ -450,8 +725,10 @@ useEffect(() => {
           <section className="welcome-card">
             <span className="eyebrow">EXAM PORTAL</span>
             <h2>Ready to begin?</h2>
+
             <p className="muted">
               Enter your details before starting your examination.
+              Camera access and acceptance of the exam rules are required.
             </p>
 
             <label htmlFor="studentName">Student name</label>
@@ -461,6 +738,7 @@ useEffect(() => {
               onChange={(event) => setStudentName(event.target.value)}
               placeholder="Enter your full name"
               autoComplete="name"
+              disabled={loading}
             />
 
             <label htmlFor="studentId">Student ID</label>
@@ -469,6 +747,7 @@ useEffect(() => {
               value={studentId}
               onChange={(event) => setStudentId(event.target.value)}
               placeholder="Enter your student ID"
+              disabled={loading}
             />
 
             <div className="exam-info">
@@ -476,32 +755,46 @@ useEffect(() => {
                 <span>Duration</span>
                 <strong>60 minutes</strong>
               </div>
+
               <div>
                 <span>Questions</span>
                 <strong>Loaded from backend</strong>
               </div>
+
               <div>
                 <span>Results</span>
                 <strong>Shown after submission</strong>
               </div>
             </div>
 
-            {error && <div className="error">{error}</div>}
+            {error && (
+              <div className="error" role="alert">
+                {error}
+              </div>
+            )}
 
             <button
               className="primary-button"
               onClick={beginExam}
               disabled={loading}
             >
-              {loading ? "Starting…" : "Start examination"}
+              {loading ? "Preparing exam…" : "Allow camera & start"}
             </button>
           </section>
 
-          <CameraPreview />
+          <CameraPreview
+            stream={cameraStream}
+            videoRef={videoRef}
+            cameraError={cameraError}
+          />
         </div>
       </main>
     );
   }
+
+  // --------------------------------------------------
+  // Results screen
+  // --------------------------------------------------
 
   if (screen === "result" && submittedResult) {
     const counts = submittedResult.counts || {
@@ -517,7 +810,9 @@ useEffect(() => {
             <div className="logo">A</div>
             <div>
               <h1>Exam results</h1>
-              <p className="subtitle">Your examination has been submitted</p>
+              <p className="subtitle">
+                Your examination has been submitted
+              </p>
             </div>
           </div>
         </header>
@@ -525,6 +820,7 @@ useEffect(() => {
         <section className="result-card">
           <span className="eyebrow">FINAL REPORT</span>
           <h2>Exam completed</h2>
+
           <p className="muted">
             {submittedResult.studentName
               ? `Well done, ${submittedResult.studentName}.`
@@ -536,10 +832,12 @@ useEffect(() => {
               <span>Attempted</span>
               <strong>{counts.attempted}</strong>
             </div>
+
             <div className="stat correct-stat">
               <span>Correct</span>
               <strong>{counts.correct}</strong>
             </div>
+
             <div className="stat wrong-stat">
               <span>Wrong</span>
               <strong>{counts.wrong}</strong>
@@ -555,13 +853,20 @@ useEffect(() => {
                   className={`review-item ${
                     item.isCorrect ? "review-correct" : "review-wrong"
                   }`}
-                  key={item.questionId}
+                  key={item.questionId ?? index}
                 >
                   <div className="review-title">
                     <strong>
                       Question {index + 1}: {item.question}
                     </strong>
-                    <span className={item.isCorrect ? "result-label correct-label" : "result-label wrong-label"}>
+
+                    <span
+                      className={
+                        item.isCorrect
+                          ? "result-label correct-label"
+                          : "result-label wrong-label"
+                      }
+                    >
                       {item.isCorrect ? "Correct" : "Wrong"}
                     </span>
                   </div>
@@ -570,6 +875,7 @@ useEffect(() => {
                     <strong>Your answer:</strong>{" "}
                     {item.selectedAnswer || "Not answered"}
                   </p>
+
                   <p>
                     <strong>Correct answer:</strong>{" "}
                     {item.correctAnswer ?? "Not available"}
@@ -589,6 +895,10 @@ useEffect(() => {
     );
   }
 
+  // --------------------------------------------------
+  // Exam screen
+  // --------------------------------------------------
+
   return (
     <main className="page exam-page">
       <header className="header exam-header">
@@ -603,11 +913,14 @@ useEffect(() => {
         <div className="timer">
           <span>Time remaining</span>
           <strong>{formatTime(remainingSeconds)}</strong>
-          
         </div>
       </header>
 
-      {error && <div className="error exam-error">{error}</div>}
+      {error && (
+        <div className="error exam-error" role="alert">
+          {error}
+        </div>
+      )}
 
       <div className="exam-layout">
         <section className="exam-main">
@@ -615,26 +928,29 @@ useEffect(() => {
             <span>
               Question {currentIndex + 1} of {questions.length}
             </span>
-            <span className="neutral-status">Answer review after submission</span>
+
+            <span className="neutral-status">
+              Answer review after submission
+            </span>
           </div>
 
-
           <p className={`proctoring-status ${proctoringStatus}`}>
-            <span className="proctoring-dot"></span>
+            <span className="proctoring-dot" />
+
             Camera Evidence:{" "}
             {proctoringStatus === "saved"
               ? "Images saved successfully"
               : proctoringStatus === "error"
                 ? "Image saving failed"
                 : started
-                  ? "Waiting for camera..."
+                  ? "Waiting for camera…"
                   : "Not recording"}
           </p>
-
 
           {currentQuestion && (
             <article className="question-card">
               <h2>{currentQuestion.question}</h2>
+
               <div className="options-list">
                 {currentQuestion.options.map((option, optionIndex) => {
                   const selected =
@@ -644,14 +960,18 @@ useEffect(() => {
                     <button
                       key={`${currentQuestion.id}-${optionIndex}`}
                       type="button"
-                      className={`option ${selected ? "option-selected" : ""}`}
+                      className={`option ${
+                        selected ? "option-selected" : ""
+                      }`}
                       onClick={() => chooseAnswer(currentQuestion, option)}
                       disabled={loading || submittedRef.current}
                     >
                       <span className="option-letter">
                         {String.fromCharCode(65 + optionIndex)}
                       </span>
+
                       <span>{option}</span>
+
                       {selected && (
                         <span className="selected-label">Selected</span>
                       )}
@@ -665,7 +985,9 @@ useEffect(() => {
           <div className="question-navigation">
             <button
               className="secondary-button"
-              onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
+              onClick={() =>
+                setCurrentIndex((index) => Math.max(0, index - 1))
+              }
               disabled={currentIndex === 0 || loading}
             >
               Previous
@@ -686,10 +1008,15 @@ useEffect(() => {
         </section>
 
         <aside className="exam-sidebar">
-          <CameraPreview />
+          <CameraPreview
+            stream={cameraStream}
+            videoRef={videoRef}
+            cameraError={cameraError}
+          />
 
           <section className="sidebar-card">
             <h3>Exam progress</h3>
+
             <div className="progress-number">
               {attemptedCount}
               <span> / {questions.length} attempted</span>
@@ -715,6 +1042,7 @@ useEffect(() => {
 
           <section className="sidebar-card">
             <h3>Questions</h3>
+
             <div className="question-grid">
               {questions.map((question, index) => {
                 const attempted =
@@ -731,6 +1059,7 @@ useEffect(() => {
                       .filter(Boolean)
                       .join(" ")}
                     onClick={() => setCurrentIndex(index)}
+                    disabled={loading}
                     title={attempted ? "Answered" : "Not answered"}
                   >
                     {index + 1}

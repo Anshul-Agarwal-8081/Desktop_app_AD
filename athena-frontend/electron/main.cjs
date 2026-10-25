@@ -1,3 +1,4 @@
+
 const {
   app,
   BrowserWindow,
@@ -8,8 +9,8 @@ const {
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
-
 const EXAM_DURATION_MS = 60 * 60 * 1000;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 let mainWindow = null;
 let examEndTime = null;
@@ -34,31 +35,45 @@ function createWindow() {
   });
 
   const devUrl =
-    process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5174";
+    process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5180";
 
   if (!app.isPackaged) {
     mainWindow.loadURL(devUrl);
 
-    // Open DevTools to help identify blank-screen errors.
-    // mainWindow.webContents.openDevTools({ mode: "detach" });
-
-    mainWindow.webContents.on("did-fail-load", (_event, code, description) => {
-      console.error("Failed to load UI:", code, description);
-    });
+    mainWindow.webContents.on(
+      "did-fail-load",
+      (_event, code, description) => {
+        console.error("Failed to load UI:", code, description);
+      }
+    );
   } else {
     mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 }
 
 app.whenReady().then(() => {
+  // Permit camera permission requests from this app.
   session.defaultSession.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      callback(permission === "media");
+    (webContents, permission, callback) => {
+      const allowedPermissions = ["media"];
+      const isOurWindow =
+        mainWindow &&
+        webContents.id === mainWindow.webContents.id;
+
+      callback(
+        Boolean(isOurWindow && allowedPermissions.includes(permission))
+      );
     }
   );
 
   session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission) => permission === "media"
+    (webContents, permission) => {
+      const isOurWindow =
+        mainWindow &&
+        webContents.id === mainWindow.webContents.id;
+
+      return Boolean(isOurWindow && permission === "media");
+    }
   );
 
   createWindow();
@@ -76,14 +91,16 @@ ipcMain.handle("show-exam-rules", async () => {
   const result = await dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Exam Rules",
-    message: "Please read the exam rules",
+    message: "Please read and accept the exam rules",
     detail:
       "1. Do not switch away from the exam during the test.\n" +
       "2. Do not copy or paste answers.\n" +
-      "3. Keep your camera enabled.\n" +
-      "4. Your results will be displayed after submission.",
-    buttons: ["Continue"],
+      "3. Keep your camera enabled during the exam.\n" +
+      "4. Camera images will be saved locally for exam review.\n" +
+      "5. Your results will be displayed after submission.",
+    buttons: ["Accept and continue", "Cancel"],
     defaultId: 0,
+    cancelId: 1,
     noLink: true,
   });
 
@@ -91,15 +108,22 @@ ipcMain.handle("show-exam-rules", async () => {
 });
 
 ipcMain.handle("set-fullscreen", async () => {
-  if (!mainWindow) return false;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error("Exam window is not available.");
+  }
 
   mainWindow.setFullScreen(true);
-  return true;
+
+  return mainWindow.isFullScreen();
 });
 
 ipcMain.handle("start-test", async (_event, student) => {
   if (!student?.studentName || !student?.studentId) {
     throw new Error("Student name and ID are required.");
+  }
+
+  if (!mainWindow || !mainWindow.isFullScreen()) {
+    throw new Error("Fullscreen must be enabled before starting the exam.");
   }
 
   examStarted = true;
@@ -121,18 +145,14 @@ ipcMain.handle("cancel-test", async () => {
   examStarted = false;
   examEndTime = null;
 
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setFullScreen(false);
   }
 
   return true;
 });
 
-
-const PROCTORING_INTERVAL_MS = 5000;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-// Only allow simple session IDs; reject path traversal.
+// Proctoring image storage
 function validateSessionId(sessionId) {
   if (
     typeof sessionId !== "string" ||
@@ -146,30 +166,31 @@ function validateSessionId(sessionId) {
 }
 
 function getProctoringSessionDirectory(sessionId) {
-  const safeSessionId = validateSessionId(sessionId);
-
   return path.join(
     app.getPath("userData"),
     "AthenaProctoring",
     "sessions",
-    safeSessionId
+    validateSessionId(sessionId)
   );
 }
 
 ipcMain.handle(
   "proctoring:save-image",
   async (_event, { sessionId, imageData }) => {
-    if (typeof imageData !== "string") {
-      throw new Error("Invalid image data");
+    if (!examStarted) {
+      throw new Error("Cannot save proctoring images outside an active exam.");
     }
 
-    // Accept JPEG data URLs only.
+    if (typeof imageData !== "string") {
+      throw new Error("Invalid image data.");
+    }
+
     const match = imageData.match(
       /^data:image\/jpeg;base64,([A-Za-z0-9+/]*={0,2})$/
     );
 
     if (!match) {
-      throw new Error("Expected a JPEG data URL");
+      throw new Error("Expected a JPEG data URL.");
     }
 
     const imageBuffer = Buffer.from(match[1], "base64");
@@ -179,35 +200,22 @@ ipcMain.handle(
       imageBuffer.length > MAX_IMAGE_BYTES ||
       imageBuffer.toString("hex", 0, 3) !== "ffd8ff"
     ) {
-      throw new Error("Invalid or oversized JPEG image");
+      throw new Error("Invalid or oversized JPEG image.");
     }
 
     const sessionDirectory =
       getProctoringSessionDirectory(sessionId);
-
-    const imagesDirectory = path.join(
-      sessionDirectory,
-      "images"
-    );
+    const imagesDirectory = path.join(sessionDirectory, "images");
 
     await fs.mkdir(imagesDirectory, { recursive: true });
 
     const timestamp = new Date().toISOString();
-    const filename =
-      timestamp.replace(/[:.]/g, "-") + ".jpg";
-
+    const filename = `${timestamp.replace(/[:.]/g, "-")}.jpg`;
     const imagePath = path.join(imagesDirectory, filename);
 
-    // Prevent accidental overwrite.
-    await fs.writeFile(imagePath, imageBuffer, {
-      flag: "wx",
-    });
+    await fs.writeFile(imagePath, imageBuffer, { flag: "wx" });
 
-    const manifestPath = path.join(
-      sessionDirectory,
-      "manifest.json"
-    );
-
+    const manifestPath = path.join(sessionDirectory, "manifest.json");
     let manifest = {
       sessionId,
       createdAt: timestamp,
@@ -215,15 +223,11 @@ ipcMain.handle(
     };
 
     try {
-      const existing = await fs.readFile(
-        manifestPath,
-        "utf8"
+      manifest = JSON.parse(
+        await fs.readFile(manifestPath, "utf8")
       );
-      manifest = JSON.parse(existing);
     } catch (error) {
-      if (error.code !== "ENOENT") {
-        throw error;
-      }
+      if (error.code !== "ENOENT") throw error;
     }
 
     manifest.images.push({
@@ -238,14 +242,9 @@ ipcMain.handle(
       "utf8"
     );
 
-    return {
-      success: true,
-      filename,
-      capturedAt: timestamp,
-    };
+    return { success: true, filename, capturedAt: timestamp };
   }
 );
-
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
