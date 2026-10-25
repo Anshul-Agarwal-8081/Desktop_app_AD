@@ -1,4 +1,3 @@
-
 const {
   app,
   BrowserWindow,
@@ -6,6 +5,7 @@ const {
   dialog,
   session,
 } = require("electron");
+
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
@@ -18,11 +18,12 @@ let examStarted = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1280,
+    height: 850,
     minWidth: 900,
     minHeight: 650,
     show: true,
+    backgroundColor: "#f3f6fb",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -52,17 +53,13 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  // Permit camera permission requests from this app.
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback) => {
-      const allowedPermissions = ["media"];
       const isOurWindow =
         mainWindow &&
         webContents.id === mainWindow.webContents.id;
 
-      callback(
-        Boolean(isOurWindow && allowedPermissions.includes(permission))
-      );
+      callback(Boolean(isOurWindow && permission === "media"));
     }
   );
 
@@ -86,7 +83,9 @@ app.whenReady().then(() => {
 });
 
 ipcMain.handle("show-exam-rules", async () => {
-  if (!mainWindow) return false;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
 
   const result = await dialog.showMessageBox(mainWindow, {
     type: "info",
@@ -114,7 +113,9 @@ ipcMain.handle("set-fullscreen", async () => {
 
   mainWindow.setFullScreen(true);
 
-  return mainWindow.isFullScreen();
+  // macOS may complete the fullscreen transition asynchronously.
+  // The start-test handler also checks fullscreen before starting.
+  return true;
 });
 
 ipcMain.handle("start-test", async (_event, student) => {
@@ -122,8 +123,14 @@ ipcMain.handle("start-test", async (_event, student) => {
     throw new Error("Student name and ID are required.");
   }
 
-  if (!mainWindow || !mainWindow.isFullScreen()) {
-    throw new Error("Fullscreen must be enabled before starting the exam.");
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    !mainWindow.isFullScreen()
+  ) {
+    throw new Error(
+      "Fullscreen is not active yet. Please try starting the exam again."
+    );
   }
 
   examStarted = true;
@@ -136,7 +143,9 @@ ipcMain.handle("start-test", async (_event, student) => {
 });
 
 ipcMain.handle("get-remaining-time", async () => {
-  if (!examStarted || !examEndTime) return EXAM_DURATION_MS;
+  if (!examStarted || !examEndTime) {
+    return EXAM_DURATION_MS;
+  }
 
   return Math.max(0, examEndTime - Date.now());
 });
@@ -152,14 +161,13 @@ ipcMain.handle("cancel-test", async () => {
   return true;
 });
 
-// Proctoring image storage
 function validateSessionId(sessionId) {
   if (
     typeof sessionId !== "string" ||
     sessionId.length > 128 ||
     !/^[a-zA-Z0-9_-]+$/.test(sessionId)
   ) {
-    throw new Error("Invalid session ID");
+    throw new Error("Invalid session ID.");
   }
 
   return sessionId;
@@ -176,9 +184,11 @@ function getProctoringSessionDirectory(sessionId) {
 
 ipcMain.handle(
   "proctoring:save-image",
-  async (_event, { sessionId, imageData }) => {
+  async (_event, { sessionId, imageData } = {}) => {
     if (!examStarted) {
-      throw new Error("Cannot save proctoring images outside an active exam.");
+      throw new Error(
+        "Cannot save proctoring images outside an active exam."
+      );
     }
 
     if (typeof imageData !== "string") {
@@ -205,6 +215,7 @@ ipcMain.handle(
 
     const sessionDirectory =
       getProctoringSessionDirectory(sessionId);
+
     const imagesDirectory = path.join(sessionDirectory, "images");
 
     await fs.mkdir(imagesDirectory, { recursive: true });
@@ -215,7 +226,11 @@ ipcMain.handle(
 
     await fs.writeFile(imagePath, imageBuffer, { flag: "wx" });
 
-    const manifestPath = path.join(sessionDirectory, "manifest.json");
+    const manifestPath = path.join(
+      sessionDirectory,
+      "manifest.json"
+    );
+
     let manifest = {
       sessionId,
       createdAt: timestamp,
@@ -227,7 +242,13 @@ ipcMain.handle(
         await fs.readFile(manifestPath, "utf8")
       );
     } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    if (!Array.isArray(manifest.images)) {
+      manifest.images = [];
     }
 
     manifest.images.push({
@@ -242,7 +263,11 @@ ipcMain.handle(
       "utf8"
     );
 
-    return { success: true, filename, capturedAt: timestamp };
+    return {
+      success: true,
+      filename,
+      capturedAt: timestamp,
+    };
   }
 );
 

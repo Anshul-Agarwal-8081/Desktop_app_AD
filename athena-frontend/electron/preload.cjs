@@ -1,21 +1,15 @@
-
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  showExamRules: () =>
-    ipcRenderer.invoke("show-exam-rules"),
+  showExamRules: () => ipcRenderer.invoke("show-exam-rules"),
 
-  setFullScreen: () =>
-    ipcRenderer.invoke("set-fullscreen"),
+  setFullScreen: () => ipcRenderer.invoke("set-fullscreen"),
 
-  startTest: (student) =>
-    ipcRenderer.invoke("start-test", student),
+  startTest: (student) => ipcRenderer.invoke("start-test", student),
 
-  getRemainingTime: () =>
-    ipcRenderer.invoke("get-remaining-time"),
+  getRemainingTime: () => ipcRenderer.invoke("get-remaining-time"),
 
-  cancelTest: () =>
-    ipcRenderer.invoke("cancel-test"),
+  cancelTest: () => ipcRenderer.invoke("cancel-test"),
 
   saveProctoringImage: (sessionId, imageData) =>
     ipcRenderer.invoke("proctoring:save-image", {

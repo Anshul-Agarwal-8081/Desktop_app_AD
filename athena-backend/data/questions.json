@@ -1,20 +1,182 @@
-
 [
   {
     "id": "q1",
-    "question": "Which language runs in a browser?",
+    "question": "Which language runs natively in a web browser?",
     "options": ["Python", "JavaScript", "C", "Java"],
     "correctAnswer": "JavaScript"
   },
   {
     "id": "q2",
     "question": "What does HTML stand for?",
-    "options": [
-      "HyperText Markup Language",
-      "HighText Machine Language",
-      "Home Tool Markup Language",
-      "Hyper Transfer Main Language"
-    ],
+    "options": ["HyperText Markup Language", "HighText Machine Language", "Home Tool Markup Language", "Hyper Transfer Main Language"],
     "correctAnswer": "HyperText Markup Language"
+  },
+  {
+    "id": "q3",
+    "question": "Which HTML element creates a hyperlink?",
+    "options": ["<link>", "<a>", "<href>", "<url>"],
+    "correctAnswer": "<a>"
+  },
+  {
+    "id": "q4",
+    "question": "Which HTML element displays an image?",
+    "options": ["<picture-src>", "<img>", "<image>", "<src>"],
+    "correctAnswer": "<img>"
+  },
+  {
+    "id": "q5",
+    "question": "Which HTML attribute provides alternative text for an image?",
+    "options": ["title", "src", "alt", "name"],
+    "correctAnswer": "alt"
+  },
+  {
+    "id": "q6",
+    "question": "Which CSS property changes text color?",
+    "options": ["font-style", "text-color", "color", "foreground"],
+    "correctAnswer": "color"
+  },
+  {
+    "id": "q7",
+    "question": "Which CSS layout system is designed primarily for one-dimensional layouts?",
+    "options": ["Grid", "Flexbox", "Float", "Position"],
+    "correctAnswer": "Flexbox"
+  },
+  {
+    "id": "q8",
+    "question": "Which CSS selector targets an element with id=\"header\"?",
+    "options": [".header", "#header", "*header", "header#"],
+    "correctAnswer": "#header"
+  },
+  {
+    "id": "q9",
+    "question": "Which CSS unit is relative to the root element's font size?",
+    "options": ["px", "em", "rem", "vh"],
+    "correctAnswer": "rem"
+  },
+  {
+    "id": "q10",
+    "question": "Which declaration creates a flex container?",
+    "options": ["display: block", "position: flex", "display: flex", "flex: display"],
+    "correctAnswer": "display: flex"
+  },
+  {
+    "id": "q11",
+    "question": "Which JavaScript keyword declares a block-scoped variable that can be reassigned?",
+    "options": ["const", "let", "static", "define"],
+    "correctAnswer": "let"
+  },
+  {
+    "id": "q12",
+    "question": "What does the JavaScript === operator check?",
+    "options": ["Value equality after type conversion", "Strict equality of value and type", "Only type equality", "Variable assignment"],
+    "correctAnswer": "Strict equality of value and type"
+  },
+  {
+    "id": "q13",
+    "question": "Which JavaScript array method transforms each element and returns a new array?",
+    "options": ["filter()", "map()", "find()", "push()"],
+    "correctAnswer": "map()"
+  },
+  {
+    "id": "q14",
+    "question": "What does JSON.stringify() do?",
+    "options": ["Parses JSON text", "Converts a JavaScript value to a JSON string", "Validates HTML", "Sends an HTTP request"],
+    "correctAnswer": "Converts a JavaScript value to a JSON string"
+  },
+  {
+    "id": "q15",
+    "question": "Which keyword is used to wait for a Promise inside an async function?",
+    "options": ["defer", "await", "yield", "pause"],
+    "correctAnswer": "await"
+  },
+  {
+    "id": "q16",
+    "question": "What is the DOM?",
+    "options": ["A database query language", "A programming language", "A tree representation of an HTML document", "A CSS framework"],
+    "correctAnswer": "A tree representation of an HTML document"
+  },
+  {
+    "id": "q17",
+    "question": "Which event commonly fires when a user clicks a button?",
+    "options": ["changeText", "submitClick", "click", "press"],
+    "correctAnswer": "click"
+  },
+  {
+    "id": "q18",
+    "question": "Which HTTP method is conventionally used to retrieve a resource?",
+    "options": ["POST", "GET", "PATCH", "DELETE"],
+    "correctAnswer": "GET"
+  },
+  {
+    "id": "q19",
+    "question": "Which HTTP status code usually indicates that a resource was successfully created?",
+    "options": ["200", "201", "301", "404"],
+    "correctAnswer": "201"
+  },
+  {
+    "id": "q20",
+    "question": "What does REST primarily describe?",
+    "options": ["A database engine", "An architectural style for networked APIs", "A CSS selector", "A JavaScript compiler"],
+    "correctAnswer": "An architectural style for networked APIs"
+  },
+  {
+    "id": "q21",
+    "question": "Which response header indicates that the response body contains JSON?",
+    "options": ["Accept-Language: json", "Content-Type: application/json", "Cache-Control: json", "Body-Type: json"],
+    "correctAnswer": "Content-Type: application/json"
+  },
+  {
+    "id": "q22",
+    "question": "What does CORS help control?",
+    "options": ["CSS inheritance", "Cross-origin browser requests", "Database indexing", "Image compression"],
+    "correctAnswer": "Cross-origin browser requests"
+  },
+  {
+    "id": "q23",
+    "question": "In React, what is a prop?",
+    "options": ["A value passed to a component", "A browser storage API", "A CSS class", "A server route"],
+    "correctAnswer": "A value passed to a component"
+  },
+  {
+    "id": "q24",
+    "question": "Which React hook is used to manage local component state?",
+    "options": ["useRoute", "useState", "useFetchOnly", "useClass"],
+    "correctAnswer": "useState"
+  },
+  {
+    "id": "q25",
+    "question": "Why should React list elements have stable keys?",
+    "options": ["To encrypt each element", "To help React identify items between renders", "To add CSS automatically", "To sort the list alphabetically"],
+    "correctAnswer": "To help React identify items between renders"
+  },
+  {
+    "id": "q26",
+    "question": "What is a common purpose of React's useEffect hook?",
+    "options": ["To declare CSS variables", "To synchronize a component with external systems", "To replace JSX", "To create a database"],
+    "correctAnswer": "To synchronize a component with external systems"
+  },
+  {
+    "id": "q27",
+    "question": "Which HTML element is most appropriate for the main content of a page?",
+    "options": ["<main>", "<span>", "<small>", "<b>"],
+    "correctAnswer": "<main>"
+  },
+  {
+    "id": "q28",
+    "question": "What is the goal of responsive web design?",
+    "options": ["A fixed layout for desktop only", "Layouts that adapt to different screen sizes", "Faster database writes", "Automatic translation"],
+    "correctAnswer": "Layouts that adapt to different screen sizes"
+  },
+  {
+    "id": "q29",
+    "question": "Which practice helps reduce cross-site scripting (XSS) risks?",
+    "options": ["Render all untrusted input as raw HTML", "Safely encode untrusted output and avoid unsafe HTML rendering", "Disable all CSS", "Store passwords in localStorage"],
+    "correctAnswer": "Safely encode untrusted output and avoid unsafe HTML rendering"
+  },
+  {
+    "id": "q30",
+    "question": "Where should production API secrets generally be stored?",
+    "options": ["Committed in frontend source code", "In public HTML comments", "In server-side environment variables or a secrets manager", "Inside CSS custom properties"],
+    "correctAnswer": "In server-side environment variables or a secrets manager"
   }
 ]

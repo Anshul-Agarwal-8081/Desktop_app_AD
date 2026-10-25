@@ -1,124 +1,38 @@
 [
   {
-    "id": "ac9c83b2-c791-4e42-9e26-722b340048d2",
-    "studentName": "fvnjhbfnd",
-    "studentId": "vrefndjnr",
-    "status": "completed",
-    "answers": {},
-    "createdAt": "2026-10-25T08:43:03.560Z",
-    "updatedAt": "2026-10-25T08:43:06.658Z"
-  },
-  {
-    "id": "ab7e2516-9a73-4984-bbb7-fb930d7d2c26",
-    "studentName": "rbekjgvh",
-    "studentId": "fvbjjf",
-    "status": "in_progress",
-    "answers": {},
-    "createdAt": "2026-10-25T08:43:59.213Z",
-    "updatedAt": "2026-10-25T08:43:59.213Z"
-  },
-  {
-    "id": "aa854530-1dac-48b5-bd5b-b354a5d2f2f3",
-    "studentName": "anshul",
-    "studentId": "bdkcc",
+    "id": "44fae516-0ad7-43e0-859c-145084e4841b",
+    "studentName": "Anshul",
+    "studentId": "fgdyhejbcfnk",
     "status": "completed",
     "answers": {
       "q1": {
         "selectedAnswer": "Python",
         "isCorrect": false,
-        "updatedAt": "2026-10-25T08:46:17.295Z"
+        "updatedAt": "2026-10-25T15:39:55.775Z"
       },
       "q2": {
-        "selectedAnswer": "Home Tool Markup Language",
+        "selectedAnswer": "Hyper Transfer Main Language",
         "isCorrect": false,
-        "updatedAt": "2026-10-25T08:46:19.549Z"
-      }
-    },
-    "createdAt": "2026-10-25T08:46:16.209Z",
-    "updatedAt": "2026-10-25T08:46:23.898Z"
-  },
-  {
-    "id": "5897e1b2-f0f6-41a7-a736-bfe09d32b0d5",
-    "studentName": "Anshul",
-    "studentId": "vrjknvjrhc",
-    "status": "completed",
-    "answers": {
-      "q1": {
-        "selectedAnswer": "JavaScript",
-        "isCorrect": true,
-        "updatedAt": "2026-10-25T09:11:40.333Z"
+        "updatedAt": "2026-10-25T15:40:01.907Z"
       },
-      "q2": {
-        "selectedAnswer": "Home Tool Markup Language",
+      "q3": {
+        "selectedAnswer": "<href>",
         "isCorrect": false,
-        "updatedAt": "2026-10-25T09:11:42.461Z"
-      }
-    },
-    "createdAt": "2026-10-25T09:11:38.843Z",
-    "updatedAt": "2026-10-25T09:11:44.703Z",
-    "completedAt": "2026-10-25T09:11:44.703Z"
-  },
-  {
-    "id": "21ef0f5a-b63b-43bb-8835-e562ad3fb8ef",
-    "studentName": "Anshul",
-    "studentId": "vrjknvjrhc",
-    "status": "completed",
-    "answers": {
-      "q1": {
-        "selectedAnswer": "JavaScript",
-        "isCorrect": true,
-        "updatedAt": "2026-10-25T09:11:51.521Z"
-      }
-    },
-    "createdAt": "2026-10-25T09:11:50.455Z",
-    "updatedAt": "2026-10-25T09:11:54.824Z",
-    "completedAt": "2026-10-25T09:11:54.824Z"
-  },
-  {
-    "id": "a0d9f752-7fad-4375-a741-7100b12a10d0",
-    "studentName": "Anshul",
-    "studentId": "gehdbcj",
-    "status": "completed",
-    "answers": {
-      "q1": {
-        "selectedAnswer": "Python",
-        "isCorrect": false,
-        "updatedAt": "2026-10-25T09:43:42.308Z"
-      }
-    },
-    "createdAt": "2026-10-25T09:43:40.907Z",
-    "updatedAt": "2026-10-25T09:43:48.405Z",
-    "completedAt": "2026-10-25T09:43:48.405Z"
-  },
-  {
-    "id": "26c002fb-c169-46dc-b1ac-74d31da3fd59",
-    "studentName": "anshhul",
-    "studentId": "ekhfcjhrejjiurhy",
-    "status": "cancelled",
-    "answers": {},
-    "createdAt": "2026-10-25T13:59:19.061Z",
-    "updatedAt": "2026-10-25T13:59:19.069Z",
-    "completedAt": null
-  },
-  {
-    "id": "4a47444c-efc2-4616-bd9c-4071fe80fc6e",
-    "studentName": "anshhul",
-    "studentId": "ekhfcjhrejjiurhy",
-    "status": "completed",
-    "answers": {
-      "q1": {
-        "selectedAnswer": "JavaScript",
-        "isCorrect": true,
-        "updatedAt": "2026-10-25T13:59:28.892Z"
+        "updatedAt": "2026-10-25T15:40:02.902Z"
       },
-      "q2": {
-        "selectedAnswer": "HighText Machine Language",
-        "isCorrect": false,
-        "updatedAt": "2026-10-25T13:59:31.785Z"
+      "q9": {
+        "selectedAnswer": "rem",
+        "isCorrect": true,
+        "updatedAt": "2026-10-25T15:40:08.290Z"
+      },
+      "q12": {
+        "selectedAnswer": "Strict equality of value and type",
+        "isCorrect": true,
+        "updatedAt": "2026-10-25T15:40:11.487Z"
       }
     },
-    "createdAt": "2026-10-25T13:59:26.227Z",
-    "updatedAt": "2026-10-25T13:59:34.093Z",
-    "completedAt": "2026-10-25T13:59:34.093Z"
+    "createdAt": "2026-10-25T15:39:53.737Z",
+    "updatedAt": "2026-10-25T15:40:14.557Z",
+    "completedAt": "2026-10-25T15:40:14.557Z"
   }
 ]

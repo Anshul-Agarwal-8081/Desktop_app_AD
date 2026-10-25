@@ -1,14 +1,9 @@
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:6001";;
+const API_URL = "http://127.0.0.1:6001";
 const EXAM_DURATION_SECONDS = 60 * 60;
 const PROCTORING_INTERVAL_MS = 5000;
-
-// --------------------------------------------------
-// Backend helper
-// --------------------------------------------------
 
 async function apiRequest(endpoint, options = {}) {
   let response;
@@ -37,56 +32,57 @@ async function apiRequest(endpoint, options = {}) {
 }
 
 function formatTime(seconds) {
-  const safeSeconds = Math.max(0, seconds);
-  const minutes = Math.floor(safeSeconds / 60);
-  const remainingSeconds = safeSeconds % 60;
+  const safe = Math.max(0, seconds);
 
-  return `${String(minutes).padStart(2, "0")}:${String(
-    remainingSeconds
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(
+    safe % 60
   ).padStart(2, "0")}`;
 }
 
-// --------------------------------------------------
-// Camera preview
-// Uses the shared stream created by App.
-// It does NOT request a second camera stream.
-// --------------------------------------------------
+function Brand({ subtitle = "Secure Examination System" }) {
+  return (
+    <div className="brand">
+      <div className="logo">A</div>
+      <div>
+        <h1>Athena</h1>
+        <p className="subtitle">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
 
 function CameraPreview({ stream, videoRef, cameraError }) {
-  const [cameraReady, setCameraReady] = useState(false);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current;
 
     if (!video || !stream) {
-      setCameraReady(false);
-      return;
+      setReady(false);
+      return undefined;
     }
 
     let active = true;
-
     video.srcObject = stream;
 
-    const handleLoaded = () => {
-      if (active) setCameraReady(true);
+    const onLoaded = () => {
+      if (active) setReady(true);
     };
 
-    video.addEventListener("loadeddata", handleLoaded);
+    video.addEventListener("loadeddata", onLoaded);
 
     video.play().then(
       () => {
-        if (active) setCameraReady(true);
+        if (active) setReady(true);
       },
       () => {
-        if (active) {
-          setCameraReady(false);
-        }
+        if (active) setReady(false);
       }
     );
 
     return () => {
       active = false;
-      video.removeEventListener("loadeddata", handleLoaded);
+      video.removeEventListener("loadeddata", onLoaded);
 
       if (video.srcObject === stream) {
         video.srcObject = null;
@@ -95,13 +91,23 @@ function CameraPreview({ stream, videoRef, cameraError }) {
   }, [stream, videoRef]);
 
   return (
-    <div className="camera-card">
-      <div className="card-heading">Camera monitoring</div>
+    <section className="camera-card">
+      <div className="camera-card-heading">
+        <div>
+          <span className="eyebrow">PROCTORING</span>
+          <h3>Camera monitoring</h3>
+        </div>
+
+        <span className={`camera-live ${ready && stream ? "is-live" : ""}`}>
+          <span className="status-dot" />
+          {ready && stream ? "Live" : "Standby"}
+        </span>
+      </div>
 
       <div className="camera-frame">
         <video ref={videoRef} autoPlay muted playsInline />
 
-        {!cameraReady && (
+        {(!ready || !stream) && (
           <div className="camera-overlay">
             {cameraError ||
               (stream ? "Connecting to camera…" : "Camera permission required")}
@@ -111,54 +117,43 @@ function CameraPreview({ stream, videoRef, cameraError }) {
 
       <div className="camera-status">
         <span
-          className={
-            cameraReady && stream
-              ? "status-dot active"
-              : "status-dot"
-          }
+          className={`status-dot ${ready && stream ? "active" : ""}`}
         />
         {cameraError
           ? "Camera unavailable"
-          : cameraReady && stream
+          : ready && stream
             ? "Camera active"
             : "Camera not ready"}
       </div>
-    </div>
+
+      <p className="camera-note">
+        Your camera preview appears here. During the exam, periodic JPEG
+        snapshots are saved locally for exam review.
+      </p>
+    </section>
   );
 }
 
-// --------------------------------------------------
-// Main application
-// --------------------------------------------------
-
 export default function App() {
   const [screen, setScreen] = useState("welcome");
-
   const [studentName, setStudentName] = useState("");
   const [studentId, setStudentId] = useState("");
-
   const [questions, setQuestions] = useState([]);
   const [sessionId, setSessionId] = useState("");
   const [answers, setAnswers] = useState({});
   const [currentIndex, setCurrentIndex] = useState(0);
-
   const [remainingSeconds, setRemainingSeconds] = useState(
     EXAM_DURATION_SECONDS
   );
-
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submittedResult, setSubmittedResult] = useState(null);
-
-  // Camera state
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraError, setCameraError] = useState("");
-
-  // Exam/proctoring state
   const [started, setStarted] = useState(false);
   const [proctoringStatus, setProctoringStatus] = useState("idle");
+  const [showSubmitDialog, setShowSubmitDialog] = useState(false);
 
-  // Refs used by answer saving and camera capture
   const videoRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const sessionIdRef = useRef("");
@@ -168,17 +163,8 @@ export default function App() {
   const saveErrors = useRef({});
   const finishingRef = useRef(false);
 
-  // --------------------------------------------------
-  // Stop camera tracks and release camera resources
-  // --------------------------------------------------
-
   const stopCamera = useCallback(() => {
-    const stream = cameraStreamRef.current;
-
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current = null;
     setCameraStream(null);
     setCameraError("");
@@ -186,29 +172,19 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      cameraStreamRef.current
-        ?.getTracks()
-        .forEach((track) => track.stop());
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
-  // --------------------------------------------------
-  // Exam timer
-  // --------------------------------------------------
-
   useEffect(() => {
-    if (screen !== "exam" || !started) return;
+    if (screen !== "exam" || !started) return undefined;
 
     const timer = setInterval(() => {
-      setRemainingSeconds((previous) => Math.max(0, previous - 1));
+      setRemainingSeconds((seconds) => Math.max(0, seconds - 1));
     }, 1000);
 
     return () => clearInterval(timer);
   }, [screen, started]);
-
-  // --------------------------------------------------
-  // Finish automatically when time runs out
-  // --------------------------------------------------
 
   const finishExam = useCallback(async () => {
     if (
@@ -225,12 +201,11 @@ export default function App() {
     setError("");
 
     try {
-      // Wait for pending answer saves before submitting.
       await answerQueue.current;
 
       if (Object.keys(saveErrors.current).length > 0) {
         throw new Error(
-          "Some answers could not be saved. Please retry those answers before submitting."
+          "Some answers could not be saved. Check your connection and try again."
         );
       }
 
@@ -238,9 +213,7 @@ export default function App() {
         `/api/sessions/${encodeURIComponent(sessionIdRef.current)}`,
         {
           method: "PATCH",
-          body: JSON.stringify({
-            status: "completed",
-          }),
+          body: JSON.stringify({ status: "completed" }),
         }
       );
 
@@ -250,15 +223,15 @@ export default function App() {
 
       try {
         await window.electronAPI?.cancelTest?.();
-      } catch (electronError) {
-        console.error("Could not exit fullscreen:", electronError);
+      } catch (cancelError) {
+        console.error("Could not exit exam fullscreen:", cancelError);
       }
 
       stopCamera();
+      setShowSubmitDialog(false);
     } catch (err) {
       submittedRef.current = false;
       finishingRef.current = false;
-
       setError(`Could not submit the exam: ${err.message}`);
     } finally {
       setLoading(false);
@@ -271,17 +244,6 @@ export default function App() {
     }
   }, [screen, started, remainingSeconds, finishExam]);
 
-  // --------------------------------------------------
-  // Start exam
-  //
-  // 1. Validate student details
-  // 2. Request camera access
-  // 3. Show exam rules and require acceptance
-  // 4. Load questions and create backend session
-  // 5. Enable fullscreen
-  // 6. Start Electron's exam timer
-  // --------------------------------------------------
-
   async function beginExam() {
     if (loading) return;
 
@@ -289,85 +251,75 @@ export default function App() {
     setCameraError("");
 
     if (studentName.trim().length < 2) {
-      setError("Enter your name to continue.");
+      setError("Enter your name using at least 2 characters.");
       return;
     }
 
     if (!/^[a-zA-Z0-9_-]{3,20}$/.test(studentId.trim())) {
       setError(
-        "Student ID must be 3–20 letters, numbers, hyphens or underscores."
+        "Student ID must contain 3–20 letters, numbers, hyphens or underscores."
       );
       return;
     }
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Camera access is not supported in this environment.");
-      setError("Camera access is unavailable. Check your Electron settings.");
+      setError(
+        "Camera access is unavailable. Check your Electron camera permissions."
+      );
       return;
     }
 
     setLoading(true);
 
-    let newStream = null;
-    let createdSessionId = "";
-    let electronTimerStarted = false;
+    let stream = null;
+    let newSessionId = "";
 
     try {
-      // Step 1: Request camera permission.
-      // The browser/Electron OS permission prompt may appear here.
-      newStream = await navigator.mediaDevices.getUserMedia({
+      // 1. Camera permission must be granted first.
+      stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: false,
       });
 
-      cameraStreamRef.current = newStream;
-      setCameraStream(newStream);
-      setCameraError("");
+      cameraStreamRef.current = stream;
+      setCameraStream(stream);
 
-      // Step 2: Require the student to accept the rules.
+      // 2. Require acceptance of the exam rules.
       if (typeof window.electronAPI?.showExamRules !== "function") {
         throw new Error(
           "Exam rules dialog is unavailable. Check electron/preload.cjs."
         );
       }
 
-      const rulesAccepted = await window.electronAPI.showExamRules();
+      const accepted = await window.electronAPI.showExamRules();
 
-      if (!rulesAccepted) {
+      if (!accepted) {
         throw new Error(
           "Exam rules were not accepted. The exam has not started."
         );
       }
 
-      // Step 3: Verify required Electron APIs.
-      if (
-        typeof window.electronAPI?.setFullScreen !== "function" ||
-        typeof window.electronAPI?.startTest !== "function"
-      ) {
-        throw new Error(
-          "Electron exam APIs are unavailable. Check preload.cjs and restart the app."
-        );
-      }
-
-      // Step 4: Load questions from the existing backend.
+      // 3. Load questions from the existing backend.
       const questionResponse = await apiRequest("/api/questions");
-      const loadedQuestions = Array.isArray(questionResponse)
-        ? questionResponse
-        : questionResponse.questions;
+      const loadedQuestions = questionResponse.questions;
 
       if (!Array.isArray(loadedQuestions) || loadedQuestions.length === 0) {
         throw new Error(
-          "No valid questions were found. Check questions.json."
+          "No questions were found. Check athena-backend/data/questions.json."
         );
       }
 
-      if (loadedQuestions.some((question) => question.id == null)) {
-        throw new Error(
-          "Every question must have an id in questions.json."
-        );
+      if (
+        loadedQuestions.some(
+          (question) =>
+            question.id == null || !Array.isArray(question.options)
+        )
+      ) {
+        throw new Error("The backend returned questions in an invalid format.");
       }
 
-      // Step 5: Create the backend session.
+      // 4. Create the backend session.
       const session = await apiRequest("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
@@ -376,38 +328,41 @@ export default function App() {
         }),
       });
 
-      createdSessionId = String(session.sessionId ?? session.id ?? "");
+      newSessionId = String(session.sessionId || "");
 
-      if (!createdSessionId || createdSessionId === "undefined") {
+      if (!newSessionId) {
+        throw new Error("The backend did not return a session ID.");
+      }
+
+      // 5. Enable fullscreen and start the Electron timer.
+      if (
+        typeof window.electronAPI?.setFullScreen !== "function" ||
+        typeof window.electronAPI?.startTest !== "function"
+      ) {
         throw new Error(
-          "The backend did not return a session ID. Check POST /api/sessions."
+          "Electron exam APIs are unavailable. Check electron/preload.cjs."
         );
       }
 
-      // Step 6: Enter fullscreen before starting the exam timer.
-      const fullscreenResult = await window.electronAPI.setFullScreen();
+      const fullscreen = await window.electronAPI.setFullScreen();
 
-      if (fullscreenResult === false) {
+      if (fullscreen === false) {
         throw new Error("Could not enable fullscreen mode.");
       }
 
-      // Step 7: Start the Electron timer.
-      const startResult = await window.electronAPI.startTest({
+      const startResponse = await window.electronAPI.startTest({
         studentName: studentName.trim(),
         studentId: studentId.trim(),
       });
 
-      if (!startResult?.success) {
-        throw new Error("The exam timer could not be started.");
+      if (!startResponse?.success) {
+        throw new Error("Could not start the exam timer.");
       }
 
-      electronTimerStarted = true;
-
-      // Initialize exam state only after the startup steps succeed.
+      // 6. Initialize the exam UI.
       setQuestions(loadedQuestions);
-
-      setSessionId(createdSessionId);
-      sessionIdRef.current = createdSessionId;
+      setSessionId(newSessionId);
+      sessionIdRef.current = newSessionId;
 
       setAnswers({});
       answersRef.current = {};
@@ -421,58 +376,54 @@ export default function App() {
       setRemainingSeconds(EXAM_DURATION_SECONDS);
       setSubmittedResult(null);
       setProctoringStatus("idle");
-
       setStarted(true);
       setScreen("exam");
     } catch (err) {
-      console.error("Could not start exam:", err);
+      console.error("Exam startup failed:", err);
 
-      // If a session was created but startup failed, try to cancel it.
-      if (createdSessionId) {
+      // Avoid leaving a backend session active if startup failed.
+      if (newSessionId) {
         try {
           await apiRequest(
-            `/api/sessions/${encodeURIComponent(createdSessionId)}`,
+            `/api/sessions/${encodeURIComponent(newSessionId)}`,
             {
               method: "PATCH",
               body: JSON.stringify({ status: "cancelled" }),
             }
           );
         } catch (cancelError) {
-          console.error(
-            "Could not cancel the incomplete backend session:",
-            cancelError
-          );
+          console.error("Could not cancel incomplete session:", cancelError);
         }
       }
 
-      if (electronTimerStarted) {
-        try {
-          await window.electronAPI?.cancelTest?.();
-        } catch (cancelError) {
-          console.error("Could not reset the exam timer:", cancelError);
-        }
+      try {
+        await window.electronAPI?.cancelTest?.();
+      } catch (cancelError) {
+        console.error("Could not reset Electron exam state:", cancelError);
+      }
+
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setCameraError(
+          "Camera permission was denied. Allow camera access in macOS System Settings and try again."
+        );
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        setCameraError(
+          "No camera was found. Connect or enable a camera and try again."
+        );
+      } else if (err.name === "NotReadableError") {
+        setCameraError(
+          "The camera may be in use by another app. Close other camera apps and try again."
+        );
       }
 
       stopCamera();
       setStarted(false);
       setScreen("welcome");
-      setCameraError(
-        err.name === "NotAllowedError"
-          ? "Camera permission was denied. Allow camera access and try again."
-          : err.name === "NotFoundError"
-            ? "No camera was found. Connect or enable a camera and try again."
-            : ""
-      );
-
       setError(err.message || "Could not start the exam.");
     } finally {
       setLoading(false);
     }
   }
-
-  // --------------------------------------------------
-  // Save a selected answer
-  // --------------------------------------------------
 
   function chooseAnswer(question, selectedAnswer) {
     if (
@@ -484,7 +435,6 @@ export default function App() {
     }
 
     const questionId = String(question.id);
-
     const nextAnswers = {
       ...answersRef.current,
       [questionId]: selectedAnswer,
@@ -494,7 +444,7 @@ export default function App() {
     setAnswers(nextAnswers);
     setError("");
 
-    // Queue requests to preserve the order of rapid answer changes.
+    // Queue answer saves so rapid clicks don't cause out-of-order writes.
     answerQueue.current = answerQueue.current
       .then(async () => {
         await apiRequest(
@@ -515,10 +465,6 @@ export default function App() {
       });
   }
 
-  // --------------------------------------------------
-  // Cancel exam
-  // --------------------------------------------------
-
   async function exitExam() {
     if (loading) return;
 
@@ -529,7 +475,7 @@ export default function App() {
     }
 
     const confirmed = window.confirm(
-      "Are you sure you want to exit? Your exam will be cancelled."
+      "Are you sure you want to cancel this exam? Your session will be marked cancelled."
     );
 
     if (!confirmed) return;
@@ -554,22 +500,12 @@ export default function App() {
 
       try {
         await window.electronAPI?.cancelTest?.();
-      } catch (electronError) {
-        console.error("Could not cancel Electron exam:", electronError);
+      } catch (cancelError) {
+        console.error("Could not exit fullscreen:", cancelError);
       }
 
       stopCamera();
-
-      setSessionId("");
-      sessionIdRef.current = "";
-      setQuestions([]);
-      setAnswers({});
-      answersRef.current = {};
-      saveErrors.current = {};
-      setCurrentIndex(0);
-      setRemainingSeconds(EXAM_DURATION_SECONDS);
-      setProctoringStatus("idle");
-
+      clearExamState();
       setScreen("welcome");
     } catch (err) {
       setError(`Could not cancel the exam: ${err.message}`);
@@ -578,12 +514,41 @@ export default function App() {
     }
   }
 
-  // --------------------------------------------------
-  // Proctoring: save a JPEG every five seconds
-  // --------------------------------------------------
+  function clearExamState() {
+    setSessionId("");
+    sessionIdRef.current = "";
 
+    setQuestions([]);
+    setAnswers({});
+    answersRef.current = {};
+
+    answerQueue.current = Promise.resolve();
+    saveErrors.current = {};
+
+    setCurrentIndex(0);
+    setRemainingSeconds(EXAM_DURATION_SECONDS);
+    setProctoringStatus("idle");
+    setSubmittedResult(null);
+    setShowSubmitDialog(false);
+
+    submittedRef.current = false;
+    finishingRef.current = false;
+  }
+
+  function resetApp() {
+    stopCamera();
+    clearExamState();
+    setError("");
+    setCameraError("");
+    setStarted(false);
+    setScreen("welcome");
+  }
+
+  // Capture a JPEG snapshot every five seconds while an exam is active.
   useEffect(() => {
-    if (!started || screen !== "exam" || !sessionId) return;
+    if (!started || screen !== "exam" || !sessionId) {
+      return undefined;
+    }
 
     let busy = false;
     let active = true;
@@ -596,15 +561,13 @@ export default function App() {
       if (
         !video ||
         video.readyState < 2 ||
-        video.videoWidth === 0 ||
-        video.videoHeight === 0
+        !video.videoWidth ||
+        !video.videoHeight
       ) {
         return;
       }
 
-      if (
-        typeof window.electronAPI?.saveProctoringImage !== "function"
-      ) {
+      if (typeof window.electronAPI?.saveProctoringImage !== "function") {
         setProctoringStatus("error");
         return;
       }
@@ -619,151 +582,120 @@ export default function App() {
         const context = canvas.getContext("2d");
 
         if (!context) {
-          throw new Error("Could not create canvas context.");
+          throw new Error("Could not create camera capture canvas.");
         }
 
-        context.drawImage(
-          video,
-          0,
-          0,
-          canvas.width,
-          canvas.height
-        );
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         const imageData = canvas.toDataURL("image/jpeg", 0.75);
-
-        const result = await window.electronAPI.saveProctoringImage(
+        const saved = await window.electronAPI.saveProctoringImage(
           sessionId,
           imageData
         );
 
-        if (!result?.success) {
-          throw new Error("The camera image was not saved.");
+        if (!saved?.success) {
+          throw new Error("Camera image was not saved.");
         }
 
         if (active) setProctoringStatus("saved");
-      } catch (captureError) {
-        console.error("Proctoring image save failed:", captureError);
-
+      } catch (err) {
+        console.error("Camera evidence save failed:", err);
         if (active) setProctoringStatus("error");
       } finally {
         busy = false;
       }
     }
 
-    // Capture once, then repeat at five-second intervals.
     captureAndSave();
 
-    const intervalId = setInterval(
-      captureAndSave,
-      PROCTORING_INTERVAL_MS
-    );
+    const interval = setInterval(captureAndSave, PROCTORING_INTERVAL_MS);
 
     return () => {
       active = false;
-      clearInterval(intervalId);
+      clearInterval(interval);
     };
   }, [started, screen, sessionId]);
 
-  // --------------------------------------------------
-  // Reset to home
-  // --------------------------------------------------
-
-  function resetApp() {
-    stopCamera();
-
-    setSessionId("");
-    sessionIdRef.current = "";
-
-    setQuestions([]);
-    setAnswers({});
-    answersRef.current = {};
-
-    answerQueue.current = Promise.resolve();
-    saveErrors.current = {};
-
-    setSubmittedResult(null);
-    setCurrentIndex(0);
-    setRemainingSeconds(EXAM_DURATION_SECONDS);
-
-    setError("");
-    setCameraError("");
-    setProctoringStatus("idle");
-    setStarted(false);
-
-    submittedRef.current = false;
-    finishingRef.current = false;
-
-    setScreen("welcome");
-  }
-
-  // --------------------------------------------------
-  // Derived values
-  // --------------------------------------------------
-
   const attemptedCount = Object.keys(answers).length;
+  const unansweredCount = Math.max(0, questions.length - attemptedCount);
   const currentQuestion = questions[currentIndex];
 
-  // --------------------------------------------------
-  // Welcome screen
-  // --------------------------------------------------
+  const answeredPercent = questions.length
+    ? Math.round((attemptedCount / questions.length) * 100)
+    : 0;
+
+  const timerClass =
+    remainingSeconds <= 60
+      ? "critical"
+      : remainingSeconds <= 300
+        ? "warning"
+        : "";
 
   if (screen === "welcome") {
     return (
       <main className="page">
         <header className="header">
-          <div className="brand">
-            <div className="logo">A</div>
-            <div>
-              <h1>Athena</h1>
-              <p className="subtitle">Secure Examination System</p>
-            </div>
-          </div>
+          <Brand />
         </header>
 
         <div className="pre-exam-layout">
           <section className="welcome-card">
-            <span className="eyebrow">EXAM PORTAL</span>
+            <span className="eyebrow">EXAM PORTAL · SECURE SESSION</span>
             <h2>Ready to begin?</h2>
 
-            <p className="muted">
-              Enter your details before starting your examination.
-              Camera access and acceptance of the exam rules are required.
+            <p className="muted intro-copy">
+              Enter your student details. You’ll check your camera and accept
+              the exam rules before the timer starts.
             </p>
 
-            <label htmlFor="studentName">Student name</label>
-            <input
-              id="studentName"
-              value={studentName}
-              onChange={(event) => setStudentName(event.target.value)}
-              placeholder="Enter your full name"
-              autoComplete="name"
-              disabled={loading}
-            />
+            <div className="form-field">
+              <label htmlFor="studentName">Student name</label>
+              <input
+                id="studentName"
+                value={studentName}
+                onChange={(event) => setStudentName(event.target.value)}
+                placeholder="Enter your full name"
+                autoComplete="name"
+                disabled={loading}
+              />
+            </div>
 
-            <label htmlFor="studentId">Student ID</label>
-            <input
-              id="studentId"
-              value={studentId}
-              onChange={(event) => setStudentId(event.target.value)}
-              placeholder="Enter your student ID"
-              disabled={loading}
-            />
+            <div className="form-field">
+              <label htmlFor="studentId">Student ID</label>
+              <input
+                id="studentId"
+                value={studentId}
+                onChange={(event) => setStudentId(event.target.value)}
+                placeholder="3–20 characters"
+                disabled={loading}
+              />
+              <small>
+                Letters, numbers, hyphens and underscores are allowed.
+              </small>
+            </div>
+
+            <div className="instructions-panel">
+              <h3>Before you start</h3>
+              <ul className="instructions-list">
+                <li>Allow camera access when prompted.</li>
+                <li>Read and accept the exam rules.</li>
+                <li>Your 60-minute timer begins when the exam starts.</li>
+                <li>Answers are saved as you select them.</li>
+              </ul>
+            </div>
 
             <div className="exam-info">
               <div>
                 <span>Duration</span>
                 <strong>60 minutes</strong>
               </div>
-
               <div>
                 <span>Questions</span>
-                <strong>Loaded from backend</strong>
+                <strong>{questions.length || "Loaded from backend"}</strong>
               </div>
-
               <div>
                 <span>Results</span>
-                <strong>Shown after submission</strong>
+                <strong>After submission</strong>
               </div>
             </div>
 
@@ -778,8 +710,20 @@ export default function App() {
               onClick={beginExam}
               disabled={loading}
             >
-              {loading ? "Preparing exam…" : "Allow camera & start"}
+              {loading ? (
+                <span className="loading-inline">
+                  <span className="spinner" />
+                  Preparing your exam…
+                </span>
+              ) : (
+                "Check camera & start exam"
+              )}
             </button>
+
+            <p className="form-footnote">
+              Camera snapshots are saved locally during the active exam. Make
+              sure you understand your institution’s camera and data policies.
+            </p>
           </section>
 
           <CameraPreview
@@ -792,63 +736,68 @@ export default function App() {
     );
   }
 
-  // --------------------------------------------------
-  // Results screen
-  // --------------------------------------------------
-
   if (screen === "result" && submittedResult) {
     const counts = submittedResult.counts || {
-      attempted: 0,
+      attempted: attemptedCount,
       correct: 0,
       wrong: 0,
     };
 
+    const review = Array.isArray(submittedResult.review)
+      ? submittedResult.review
+      : [];
+
     return (
       <main className="page result-page">
         <header className="header">
-          <div className="brand">
-            <div className="logo">A</div>
-            <div>
-              <h1>Exam results</h1>
-              <p className="subtitle">
-                Your examination has been submitted
-              </p>
-            </div>
-          </div>
+          <Brand subtitle="Examination report" />
         </header>
 
         <section className="result-card">
           <span className="eyebrow">FINAL REPORT</span>
-          <h2>Exam completed</h2>
 
-          <p className="muted">
-            {submittedResult.studentName
-              ? `Well done, ${submittedResult.studentName}.`
-              : "Your final result is ready."}
-          </p>
+          <div className="result-hero">
+            <div className="result-check">✓</div>
+            <div>
+              <h2>Exam submitted</h2>
+              <p className="muted">
+                {submittedResult.studentName
+                  ? `Thank you, ${submittedResult.studentName}.`
+                  : "Your final report is ready."}
+              </p>
+            </div>
+          </div>
 
           <div className="result-stats">
             <div className="stat">
               <span>Attempted</span>
-              <strong>{counts.attempted}</strong>
+              <strong>{counts.attempted ?? 0}</strong>
             </div>
-
             <div className="stat correct-stat">
-              <span>Correct</span>
-              <strong>{counts.correct}</strong>
+              <span>Correct answers</span>
+              <strong>{counts.correct ?? 0}</strong>
             </div>
-
             <div className="stat wrong-stat">
-              <span>Wrong</span>
-              <strong>{counts.wrong}</strong>
+              <span>Incorrect answers</span>
+              <strong>{counts.wrong ?? 0}</strong>
             </div>
           </div>
 
-          <h3>Answer review</h3>
+          <div className="review-heading">
+            <div>
+              <h3>Answer review</h3>
+              <p className="muted">
+                Review the answers saved for this session.
+              </p>
+            </div>
+            <span className="question-count-label">
+              {review.length} reviewed
+            </span>
+          </div>
 
-          {submittedResult.review?.length ? (
+          {review.length ? (
             <div className="review-list">
-              {submittedResult.review.map((item, index) => (
+              {review.map((item, index) => (
                 <article
                   className={`review-item ${
                     item.isCorrect ? "review-correct" : "review-wrong"
@@ -857,17 +806,14 @@ export default function App() {
                 >
                   <div className="review-title">
                     <strong>
-                      Question {index + 1}: {item.question}
+                      Q{index + 1}. {item.question}
                     </strong>
-
                     <span
-                      className={
-                        item.isCorrect
-                          ? "result-label correct-label"
-                          : "result-label wrong-label"
-                      }
+                      className={`result-label ${
+                        item.isCorrect ? "correct-label" : "wrong-label"
+                      }`}
                     >
-                      {item.isCorrect ? "Correct" : "Wrong"}
+                      {item.isCorrect ? "Correct" : "Incorrect"}
                     </span>
                   </div>
 
@@ -884,102 +830,130 @@ export default function App() {
               ))}
             </div>
           ) : (
-            <p className="muted">No answers were submitted.</p>
+            <div className="empty-state">
+              No saved answers were returned for review.
+            </div>
           )}
 
           <button className="primary-button" onClick={resetApp}>
-            Back to home
+            Return to home
           </button>
         </section>
       </main>
     );
   }
 
-  // --------------------------------------------------
-  // Exam screen
-  // --------------------------------------------------
-
   return (
     <main className="page exam-page">
       <header className="header exam-header">
-        <div className="brand">
-          <div className="logo">A</div>
-          <div>
-            <h1>Athena Examination</h1>
-            <p className="subtitle">{studentName}</p>
-          </div>
-        </div>
+        <Brand subtitle={`Candidate: ${studentName}`} />
 
-        <div className="timer">
-          <span>Time remaining</span>
+        <div className={`timer ${timerClass}`} aria-live="polite">
+          <span>TIME REMAINING</span>
           <strong>{formatTime(remainingSeconds)}</strong>
+          {remainingSeconds <= 300 && (
+            <small>
+              {remainingSeconds <= 60
+                ? "Less than a minute"
+                : "Five minutes or less"}
+            </small>
+          )}
         </div>
       </header>
 
       {error && (
         <div className="error exam-error" role="alert">
-          {error}
+          <strong>Attention:</strong> {error}
         </div>
       )}
 
       <div className="exam-layout">
         <section className="exam-main">
-          <div className="question-topline">
-            <span>
+          <div className="exam-overview">
+            <div>
+              <span className="eyebrow">WEB DEVELOPMENT ASSESSMENT</span>
+              <h2>Examination</h2>
+            </div>
+            <span className="question-count-label">
               Question {currentIndex + 1} of {questions.length}
             </span>
+          </div>
 
-            <span className="neutral-status">
-              Answer review after submission
-            </span>
+          <div
+            className="exam-progress"
+            aria-label={`${answeredPercent}% answered`}
+          >
+            <div className="exam-progress-label">
+              <span>Overall progress</span>
+              <strong>
+                {attemptedCount}/{questions.length} answered
+              </strong>
+            </div>
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{ width: `${answeredPercent}%` }}
+              />
+            </div>
           </div>
 
           <p className={`proctoring-status ${proctoringStatus}`}>
             <span className="proctoring-dot" />
-
-            Camera Evidence:{" "}
+            Camera evidence:{" "}
             {proctoringStatus === "saved"
-              ? "Images saved successfully"
+              ? "Latest image saved"
               : proctoringStatus === "error"
-                ? "Image saving failed"
+                ? "Could not save image"
                 : started
-                  ? "Waiting for camera…"
+                  ? "Waiting for first capture…"
                   : "Not recording"}
           </p>
 
-          {currentQuestion && (
+          {currentQuestion ? (
             <article className="question-card">
+              <div className="question-card-top">
+                <span className="question-pill">
+                  QUESTION {currentIndex + 1}
+                </span>
+                <span className="question-count-label">Single choice</span>
+              </div>
+
               <h2>{currentQuestion.question}</h2>
 
               <div className="options-list">
-                {currentQuestion.options.map((option, optionIndex) => {
+                {currentQuestion.options.map((option, index) => {
                   const selected =
                     answers[String(currentQuestion.id)] === option;
 
                   return (
                     <button
-                      key={`${currentQuestion.id}-${optionIndex}`}
                       type="button"
+                      key={`${currentQuestion.id}-${index}`}
                       className={`option ${
                         selected ? "option-selected" : ""
                       }`}
                       onClick={() => chooseAnswer(currentQuestion, option)}
                       disabled={loading || submittedRef.current}
+                      aria-pressed={selected}
                     >
                       <span className="option-letter">
-                        {String.fromCharCode(65 + optionIndex)}
+                        {String.fromCharCode(65 + index)}
                       </span>
-
-                      <span>{option}</span>
-
+                      <span className="option-text">{option}</span>
                       {selected && (
-                        <span className="selected-label">Selected</span>
+                        <span className="selected-label">Selected ✓</span>
                       )}
                     </button>
                   );
                 })}
               </div>
             </article>
+          ) : (
+            <div className="question-card">
+              <div className="empty-state">
+                No question is available at this position.
+              </div>
+            </div>
           )}
 
           <div className="question-navigation">
@@ -990,11 +964,15 @@ export default function App() {
               }
               disabled={currentIndex === 0 || loading}
             >
-              Previous
+              ← Previous
             </button>
 
+            <span className="navigation-counter">
+              {currentIndex + 1} / {questions.length}
+            </span>
+
             <button
-              className="secondary-button"
+              className="secondary-button next-button"
               onClick={() =>
                 setCurrentIndex((index) =>
                   Math.min(questions.length - 1, index + 1)
@@ -1002,7 +980,7 @@ export default function App() {
               }
               disabled={currentIndex >= questions.length - 1 || loading}
             >
-              Next
+              Next →
             </button>
           </div>
         </section>
@@ -1015,52 +993,66 @@ export default function App() {
           />
 
           <section className="sidebar-card">
-            <h3>Exam progress</h3>
+            <div className="sidebar-heading">
+              <h3>Exam progress</h3>
+              <span className="question-count-label">{answeredPercent}%</span>
+            </div>
 
             <div className="progress-number">
               {attemptedCount}
-              <span> / {questions.length} attempted</span>
+              <span> / {questions.length} answered</span>
             </div>
 
             <div className="progress-track">
               <div
                 className="progress-fill"
-                style={{
-                  width: `${
-                    questions.length
-                      ? (attemptedCount / questions.length) * 100
-                      : 0
-                  }%`,
-                }}
+                style={{ width: `${answeredPercent}%` }}
               />
             </div>
 
-            <p className="muted small">
-              Correct and wrong answers are hidden until the exam is submitted.
-            </p>
+            <div className="legend">
+              <span>
+                <i className="legend-dot answered" />
+                Answered
+              </span>
+              <span>
+                <i className="legend-dot current-legend" />
+                Current
+              </span>
+              <span>
+                <i className="legend-dot unanswered" />
+                Unanswered
+              </span>
+            </div>
           </section>
 
           <section className="sidebar-card">
-            <h3>Questions</h3>
+            <div className="sidebar-heading">
+              <h3>Question navigator</h3>
+              <span className="question-count-label">
+                {questions.length} total
+              </span>
+            </div>
 
             <div className="question-grid">
               {questions.map((question, index) => {
-                const attempted =
+                const answered =
                   answers[String(question.id)] !== undefined;
 
                 return (
                   <button
                     key={question.id}
-                    className={[
-                      "question-number",
-                      index === currentIndex ? "current" : "",
-                      attempted ? "attempted" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
+                    className={`question-number ${
+                      index === currentIndex ? "current" : ""
+                    } ${answered ? "attempted" : ""}`}
                     onClick={() => setCurrentIndex(index)}
                     disabled={loading}
-                    title={attempted ? "Answered" : "Not answered"}
+                    aria-label={`Go to question ${index + 1}, ${
+                      answered ? "answered" : "unanswered"
+                    }`}
+                    aria-current={
+                      index === currentIndex ? "step" : undefined
+                    }
                   >
                     {index + 1}
                   </button>
@@ -1069,23 +1061,108 @@ export default function App() {
             </div>
           </section>
 
-          <button
-            className="submit-button"
-            onClick={finishExam}
-            disabled={loading}
-          >
-            {loading ? "Submitting…" : "Submit exam"}
-          </button>
+          <div className="submission-summary">
+            <strong>{unansweredCount}</strong>
+            <span>
+              unanswered question{unansweredCount === 1 ? "" : "s"}
+            </span>
+          </div>
 
           <button
-            className="text-button"
-            onClick={exitExam}
+            className="submit-button"
+            onClick={() => setShowSubmitDialog(true)}
             disabled={loading}
           >
+            {loading ? (
+              <span className="loading-inline">
+                <span className="spinner" />
+                Saving…
+              </span>
+            ) : (
+              "Review & submit exam"
+            )}
+          </button>
+
+          <button className="text-button" onClick={exitExam} disabled={loading}>
             Cancel exam
           </button>
         </aside>
       </div>
+
+      {showSubmitDialog && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !loading) {
+              setShowSubmitDialog(false);
+            }
+          }}
+        >
+          <section
+            className="submit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submit-title"
+          >
+            <div className="modal-icon">✓</div>
+            <h2 id="submit-title">Submit your exam?</h2>
+            <p className="muted">
+              You’re about to submit your answers. You cannot change them after
+              submission.
+            </p>
+
+            <div className="modal-summary">
+              <div>
+                <span>Answered</span>
+                <strong>
+                  {attemptedCount} / {questions.length}
+                </strong>
+              </div>
+              <div>
+                <span>Unanswered</span>
+                <strong>{unansweredCount}</strong>
+              </div>
+              <div>
+                <span>Time left</span>
+                <strong>{formatTime(remainingSeconds)}</strong>
+              </div>
+            </div>
+
+            {unansweredCount > 0 && (
+              <div className="warning-note">
+                You still have {unansweredCount} unanswered question
+                {unansweredCount === 1 ? "" : "s"}. You can return to the exam
+                or submit anyway.
+              </div>
+            )}
+
+            {error && (
+              <div className="error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setShowSubmitDialog(false)}
+                disabled={loading}
+              >
+                Continue exam
+              </button>
+
+              <button
+                className="submit-button modal-submit"
+                onClick={finishExam}
+                disabled={loading}
+              >
+                {loading ? "Submitting…" : "Confirm submission"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
