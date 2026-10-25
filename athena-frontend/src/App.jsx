@@ -123,14 +123,7 @@ const [proctoringStatus, setProctoringStatus] = useState("idle");
 
 
 
-  // Adapt the property name to your actual backend response.
-const createdSessionId = data.sessionId ?? data.id;
 
-if (!createdSessionId) {
-  throw new Error("Backend did not return a session ID");
-}
-
-setSessionId(String(createdSessionId));
 
 
 
@@ -342,6 +335,87 @@ setSessionId(String(createdSessionId));
     }
   }
 
+
+
+useEffect(() => {
+  if (!started || !sessionId) return;
+
+  let busy = false;
+  let intervalId;
+
+  const captureAndSave = async () => {
+    if (busy) return;
+
+    const video = videoRef.current;
+
+    if (
+      !video ||
+      video.readyState < 2 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0
+    ) {
+      return;
+    }
+
+    busy = true;
+
+    try {
+      const canvas = document.createElement("canvas");
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        throw new Error("Could not create canvas context");
+      }
+
+      context.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+      const imageData = canvas.toDataURL(
+        "image/jpeg",
+        0.75
+      );
+
+      const result =
+        await window.electronAPI.saveProctoringImage(
+          sessionId,
+          imageData
+        );
+
+      if (!result?.success) {
+        throw new Error("Image was not saved");
+      }
+
+      setProctoringStatus("saved");
+    } catch (error) {
+      console.error("Proctoring image save failed:", error);
+      setProctoringStatus("error");
+    } finally {
+      busy = false;
+    }
+  };
+
+  // Capture the first image after the camera is ready,
+  // then capture at five-second intervals.
+  captureAndSave();
+
+  intervalId = setInterval(captureAndSave, 5000);
+
+  return () => {
+    clearInterval(intervalId);
+  };
+}, [started, sessionId]);
+
+
+
   function resetApp() {
     setSessionId("");
     sessionIdRef.current = "";
@@ -529,6 +603,7 @@ setSessionId(String(createdSessionId));
         <div className="timer">
           <span>Time remaining</span>
           <strong>{formatTime(remainingSeconds)}</strong>
+          
         </div>
       </header>
 
@@ -542,6 +617,20 @@ setSessionId(String(createdSessionId));
             </span>
             <span className="neutral-status">Answer review after submission</span>
           </div>
+
+
+          <p className={`proctoring-status ${proctoringStatus}`}>
+            <span className="proctoring-dot"></span>
+            Camera Evidence:{" "}
+            {proctoringStatus === "saved"
+              ? "Images saved successfully"
+              : proctoringStatus === "error"
+                ? "Image saving failed"
+                : started
+                  ? "Waiting for camera..."
+                  : "Not recording"}
+          </p>
+
 
           {currentQuestion && (
             <article className="question-card">

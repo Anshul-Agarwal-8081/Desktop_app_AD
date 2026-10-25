@@ -7,7 +7,7 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const path = require("node:path");
+
 
 const EXAM_DURATION_MS = 60 * 60 * 1000;
 
@@ -21,7 +21,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 650,
-    show: false,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -29,21 +29,25 @@ function createWindow() {
     },
   });
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
-  });
-
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
-const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5174";
 
-if (!app.isPackaged) {
-  mainWindow.loadURL(devUrl);
-} else {
-  mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
-}
+  const devUrl =
+    process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5174";
 
+  if (!app.isPackaged) {
+    mainWindow.loadURL(devUrl);
+
+    // Open DevTools to help identify blank-screen errors.
+    // mainWindow.webContents.openDevTools({ mode: "detach" });
+
+    mainWindow.webContents.on("did-fail-load", (_event, code, description) => {
+      console.error("Failed to load UI:", code, description);
+    });
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+  }
 }
 
 app.whenReady().then(() => {
