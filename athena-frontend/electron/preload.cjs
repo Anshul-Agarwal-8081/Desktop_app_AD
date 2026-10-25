@@ -7,4 +7,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   startTest: (student) => ipcRenderer.invoke("start-test", student),
   getRemainingTime: () => ipcRenderer.invoke("get-remaining-time"),
   cancelTest: () => ipcRenderer.invoke("cancel-test"),
+  saveProctoringImage: (sessionId, imageData) =>
+  ipcRenderer.invoke("proctoring:save-image", {
+    sessionId,
+    imageData,
+  }),
 });

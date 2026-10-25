@@ -114,8 +114,25 @@ export default function App() {
   const answersRef = useRef({});
   const sessionIdRef = useRef("");
   const submittedRef = useRef(false);
+  const videoRef = useRef(null);
+
+const [started, setStarted] = useState(false);
+const [proctoringStatus, setProctoringStatus] = useState("idle");
 
   const saveErrors = useRef({});
+
+
+
+  // Adapt the property name to your actual backend response.
+const createdSessionId = data.sessionId ?? data.id;
+
+if (!createdSessionId) {
+  throw new Error("Backend did not return a session ID");
+}
+
+setSessionId(String(createdSessionId));
+
+
 
   useEffect(() => {
     if (screen !== "exam") return;
