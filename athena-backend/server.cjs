@@ -1,4 +1,3 @@
-
 const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs/promises");
@@ -6,92 +5,113 @@ const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
 const app = express();
-const PORT = 6001;
+const PORT = Number(process.env.PORT) || 6001;
 
 const DATA_DIR = path.join(__dirname, "data");
 const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-    ],
-    methods: ["GET", "POST", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
-
+app.use(cors());
 app.use(express.json({ limit: "100kb" }));
 
-async function readJson(filePath, fallback) {
+app.use((req, _res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
+async function readJson(file, fallback = []) {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
+    return JSON.parse(await fs.readFile(file, "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT") {
-      await writeJson(filePath, fallback);
-      return fallback;
-    }
-    throw error;
+    if (error.code !== "ENOENT") throw error;
+    await writeJson(file, fallback);
+    return fallback;
   }
 }
 
-async function writeJson(filePath, data) {
-  const tempPath = `${filePath}.tmp`;
+async function writeJson(file, data) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
 
-  await fs.writeFile(
-    tempPath,
-    JSON.stringify(data, null, 2) + "\n",
-    "utf8"
-  );
-
-  await fs.rename(tempPath, filePath);
+  const tempFile = `${file}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(data, null, 2), "utf8");
+  await fs.rename(tempFile, file);
 }
 
-function isValidQuestion(item) {
+function validQuestion(q) {
   return (
-    item &&
-    item.id !== undefined &&
-    typeof (item.question ?? item.text) === "string" &&
-    Array.isArray(item.options) &&
-    item.options.every((option) => typeof option === "string")
+    q &&
+    q.id !== undefined &&
+    typeof (q.question ?? q.text) === "string" &&
+    Array.isArray(q.options) &&
+    q.options.every((option) => typeof option === "string")
   );
 }
 
-function toPublicQuestion(item) {
+function publicQuestion(q) {
+  // Never send correctAnswer to the exam UI.
   return {
-    id: String(item.id),
-    question: item.question ?? item.text,
-    options: item.options,
+    id: String(q.id),
+    question: q.question ?? q.text,
+    options: q.options,
   };
+}
+
+function calculateCounts(answers = {}) {
+  const attemptedAnswers = Object.values(answers).filter(
+    (answer) => answer && typeof answer.selectedAnswer === "string"
+  );
+
+  const correct = attemptedAnswers.filter(
+    (answer) => answer.isCorrect === true
+  ).length;
+
+  return {
+    attempted: attemptedAnswers.length,
+    correct,
+    wrong: attemptedAnswers.length - correct,
+  };
+}
+
+function buildReview(session, questions) {
+  return Object.entries(session.answers || {}).map(
+    ([questionId, answer]) => {
+      const q = questions.find(
+        (item) => String(item.id) === String(questionId)
+      );
+
+      return {
+        questionId,
+        question: q?.question ?? q?.text ?? "Question unavailable",
+        options: q?.options ?? [],
+        selectedAnswer: answer.selectedAnswer,
+        correctAnswer: q?.correctAnswer ?? null,
+        isCorrect: answer.isCorrect === true,
+      };
+    }
+  );
 }
 
 async function initializeFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 
-  for (const [filePath, fallback] of [
+  for (const [file, fallback] of [
     [QUESTIONS_FILE, []],
     [SESSIONS_FILE, []],
   ]) {
     try {
-      await fs.access(filePath);
+      await fs.access(file);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await writeJson(filePath, fallback);
+      await writeJson(file, fallback);
     }
 
-    const data = await readJson(filePath, fallback);
-
+    const data = await readJson(file, fallback);
     if (!Array.isArray(data)) {
-      throw new Error(
-        `${path.basename(filePath)} must contain a JSON array`
-      );
+      throw new Error(`${path.basename(file)} must contain a JSON array`);
     }
   }
 }
 
-// Health check
 app.get("/health", async (_req, res) => {
   try {
     await Promise.all([
@@ -103,104 +123,63 @@ app.get("/health", async (_req, res) => {
       status: "ok",
       service: "athena-backend",
       port: PORT,
+      storage: "json",
+      timestamp: new Date().toISOString(),
     });
   } catch {
-    res.status(503).json({
-      status: "error",
-      message: "A JSON storage file is unavailable",
-    });
+    res.status(503).json({ status: "error", message: "Storage unavailable" });
   }
 });
 
-// Get all public questions; never send correctAnswer to the renderer.
 app.get("/api/questions", async (_req, res, next) => {
   try {
-    const questions = await readJson(QUESTIONS_FILE, []);
+    const questions = await readJson(QUESTIONS_FILE);
 
     if (!Array.isArray(questions)) {
-      return res.status(500).json({
-        error: "Questions file must contain a JSON array",
-      });
+      return res.status(500).json({ error: "questions.json must be an array" });
     }
 
-    const publicQuestions = questions
-      .filter(isValidQuestion)
-      .map(toPublicQuestion);
+    const safeQuestions = questions.filter(validQuestion).map(publicQuestion);
 
     res.json({
-      count: publicQuestions.length,
-      questions: publicQuestions,
+      count: safeQuestions.length,
+      questions: safeQuestions,
     });
   } catch (error) {
     next(error);
   }
 });
 
-// Get one public question.
-app.get("/api/questions/:id", async (req, res, next) => {
-  try {
-    const questions = await readJson(QUESTIONS_FILE, []);
-    const item = questions.find(
-      (question) =>
-        question && String(question.id) === req.params.id
-    );
-
-    if (!isValidQuestion(item)) {
-      return res.status(404).json({
-        error: "Question not found",
-      });
-    }
-
-    res.json(toPublicQuestion(item));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Create and persist an exam session.
 app.post("/api/sessions", async (req, res, next) => {
   try {
     const { studentName, studentId } = req.body ?? {};
 
     if (
       typeof studentName !== "string" ||
-      studentName.trim().length < 2 ||
-      studentName.trim().length > 80
+      studentName.trim().length < 2
     ) {
-      return res.status(400).json({
-        error: "Student name must be between 2 and 80 characters",
-      });
+      return res.status(400).json({ error: "Enter a valid student name" });
     }
 
     if (
       typeof studentId !== "string" ||
       !/^[a-zA-Z0-9_-]{3,20}$/.test(studentId.trim())
     ) {
-      return res.status(400).json({
-        error:
-          "Student ID must contain 3-20 letters, numbers, hyphens or underscores",
-      });
+      return res.status(400).json({ error: "Enter a valid student ID" });
     }
 
-    const sessions = await readJson(SESSIONS_FILE, []);
-
-    if (!Array.isArray(sessions)) {
-      throw new Error("sessions.json must contain a JSON array");
-    }
-
+    const sessions = await readJson(SESSIONS_FILE);
     const normalizedId = studentId.trim().toLowerCase();
 
-    const existing = sessions.find(
+    const activeSession = sessions.find(
       (session) =>
-        typeof session.studentId === "string" &&
         session.studentId.toLowerCase() === normalizedId &&
         session.status === "in_progress"
     );
 
-    if (existing) {
+    if (activeSession) {
       return res.status(409).json({
-        error: "This student already has an active session",
-        sessionId: existing.id,
+        error: "This student already has an active exam session",
       });
     }
 
@@ -214,134 +193,205 @@ app.post("/api/sessions", async (req, res, next) => {
       answers: {},
       createdAt: now,
       updatedAt: now,
+      completedAt: null,
     };
 
     sessions.push(session);
     await writeJson(SESSIONS_FILE, sessions);
 
-    return res.status(201).json({
-      message: "Exam session created",
-      session,
+    res.status(201).json({
+      success: true,
+      sessionId: session.id,
     });
   } catch (error) {
     next(error);
   }
 });
 
-// Get one session.
-app.get("/api/sessions/:id", async (req, res, next) => {
+app.put(
+  "/api/sessions/:sessionId/answers/:questionId",
+  async (req, res, next) => {
+    try {
+      const { sessionId, questionId } = req.params;
+      const { selectedAnswer } = req.body ?? {};
+
+      if (typeof selectedAnswer !== "string") {
+        return res.status(400).json({
+          error: "selectedAnswer must be a string",
+        });
+      }
+
+      const [sessions, questions] = await Promise.all([
+        readJson(SESSIONS_FILE),
+        readJson(QUESTIONS_FILE),
+      ]);
+
+      const session = sessions.find(
+        (item) => String(item.id) === String(sessionId)
+      );
+
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+
+      if (session.status !== "in_progress") {
+        return res.status(409).json({ error: "The exam has ended" });
+      }
+
+      const question = questions.find(
+        (item) => String(item.id) === String(questionId)
+      );
+
+      if (!validQuestion(question)) {
+        return res.status(404).json({ error: "Question not found" });
+      }
+
+      if (!question.options.includes(selectedAnswer)) {
+        return res.status(400).json({
+          error: "Selected answer is not a valid option",
+        });
+      }
+
+      if (!session.answers || Array.isArray(session.answers)) {
+        session.answers = {};
+      }
+
+      // Update the existing question's answer instead of adding another.
+      // Correctness is stored on the server but not returned to the UI.
+      session.answers[String(questionId)] = {
+        selectedAnswer,
+        isCorrect: selectedAnswer === question.correctAnswer,
+        updatedAt: new Date().toISOString(),
+      };
+
+      session.updatedAt = new Date().toISOString();
+
+      await writeJson(SESSIONS_FILE, sessions);
+
+      // Do not return isCorrect, correctAnswer, or correct/wrong counts.
+      res.json({
+        success: true,
+        saved: true,
+        attempted: Object.keys(session.answers).length,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+app.patch("/api/sessions/:id", async (req, res, next) => {
   try {
-    const sessions = await readJson(SESSIONS_FILE, []);
+    const { status } = req.body ?? {};
+    const sessions = await readJson(SESSIONS_FILE);
+    const questions = await readJson(QUESTIONS_FILE);
+
     const session = sessions.find(
-      (item) => item.id === req.params.id
+      (item) => String(item.id) === String(req.params.id)
     );
 
     if (!session) {
-      return res.status(404).json({
-        error: "Session not found",
-      });
+      return res.status(404).json({ error: "Session not found" });
     }
-
-    res.json(session);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Save answers and/or finish a session.
-app.patch("/api/sessions/:id", async (req, res, next) => {
-  try {
-    const { status, answers } = req.body ?? {};
-
-    if (
-      status !== undefined &&
-      !["in_progress", "completed"].includes(status)
-    ) {
-      return res.status(400).json({
-        error: "Status must be in_progress or completed",
-      });
-    }
-
-    if (
-      answers !== undefined &&
-      (
-        answers === null ||
-        typeof answers !== "object" ||
-        Array.isArray(answers)
-      )
-    ) {
-      return res.status(400).json({
-        error: "Answers must be a JSON object",
-      });
-    }
-
-    const sessions = await readJson(SESSIONS_FILE, []);
-    const index = sessions.findIndex(
-      (item) => item.id === req.params.id
-    );
-
-    if (index === -1) {
-      return res.status(404).json({
-        error: "Session not found",
-      });
-    }
-
-    const session = sessions[index];
 
     if (session.status === "completed") {
-      return res.status(409).json({
-        error: "This session is already completed",
+      return res.status(409).json({ error: "Exam already submitted" });
+    }
+
+    if (status !== "completed" && status !== "cancelled") {
+      return res.status(400).json({
+        error: "Status must be completed or cancelled",
       });
     }
 
-    if (answers !== undefined) {
-      session.answers = {
-        ...session.answers,
-        ...answers,
-      };
-    }
-
-    if (status !== undefined) {
-      session.status = status;
-    }
-
+    session.status = status;
     session.updatedAt = new Date().toISOString();
+
+    if (status === "completed") {
+      session.completedAt = new Date().toISOString();
+    }
 
     await writeJson(SESSIONS_FILE, sessions);
 
+    if (status === "cancelled") {
+      return res.json({ success: true, status: session.status });
+    }
+
+    // The result is returned only after the session is completed.
     res.json({
-      message: "Session updated",
-      session,
+      success: true,
+      status: session.status,
+      studentName: session.studentName,
+      studentId: session.studentId,
+      counts: calculateCounts(session.answers),
+      review: buildReview(session, questions),
     });
   } catch (error) {
     next(error);
   }
 });
 
-app.use((_req, res) => {
-  res.status(404).json({ error: "Route not found" });
+app.get("/api/sessions/:id", async (req, res, next) => {
+  try {
+    const sessions = await readJson(SESSIONS_FILE);
+    const session = sessions.find(
+      (item) => String(item.id) === String(req.params.id)
+    );
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (session.status !== "completed") {
+      // Do not expose internal correctness during an active exam.
+      return res.json({
+        id: session.id,
+        studentName: session.studentName,
+        studentId: session.studentId,
+        status: session.status,
+        answers: Object.fromEntries(
+          Object.entries(session.answers || {}).map(([id, answer]) => [
+            id,
+            { selectedAnswer: answer.selectedAnswer },
+          ])
+        ),
+      });
+    }
+
+    const questions = await readJson(QUESTIONS_FILE);
+
+    res.json({
+      id: session.id,
+      studentName: session.studentName,
+      studentId: session.studentId,
+      status: session.status,
+      counts: calculateCounts(session.answers),
+      review: buildReview(session, questions),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((req, res) => {
+  res.status(404).json({ error: `Route not found: ${req.method} ${req.url}` });
 });
 
 app.use((error, _req, res, _next) => {
   console.error("Backend error:", error);
 
   if (error instanceof SyntaxError && "body" in error) {
-    return res.status(400).json({
-      error: "Invalid JSON request body",
-    });
+    return res.status(400).json({ error: "Invalid JSON body" });
   }
 
-  res.status(500).json({
-    error: "Internal server error",
-  });
+  res.status(500).json({ error: error.message || "Internal server error" });
 });
 
 initializeFiles()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Athena backend: http://localhost:${PORT}`);
-      console.log(`Health: http://localhost:${PORT}/health`);
-      console.log(`Session storage: ${SESSIONS_FILE}`);
+      console.log(`Athena backend running at http://localhost:${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/health`);
     });
   })
   .catch((error) => {
