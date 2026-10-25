@@ -1,8 +1,8 @@
-
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 const API_URL = "http://localhost:6001";
+const EXAM_DURATION_SECONDS = 60 * 60;
 
 async function apiRequest(endpoint, options = {}) {
   let response;
@@ -11,127 +11,166 @@ async function apiRequest(endpoint, options = {}) {
     response = await fetch(`${API_URL}${endpoint}`, {
       ...options,
       headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...options.headers,
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
       },
     });
   } catch {
     throw new Error(
-      `Cannot connect to the backend at ${API_URL}. Start your backend with node server.cjs.`
+      "Cannot connect to the backend at localhost:6001. Start athena-backend and try again."
     );
   }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(
-      data.error || `Request failed with status ${response.status}`
-    );
+    throw new Error(data.error || `Request failed (${response.status})`);
   }
 
   return data;
 }
 
+function formatTime(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(
+    remainingSeconds
+  ).padStart(2, "0")}`;
+}
+
+function CameraPreview() {
+  const videoRef = useRef(null);
+  const [cameraError, setCameraError] = useState("");
+  const [cameraReady, setCameraReady] = useState(false);
+
+  useEffect(() => {
+    let stream;
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+          setCameraReady(true);
+        }
+      } catch {
+        setCameraError("Camera permission is unavailable.");
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  return (
+    <div className="camera-card">
+      <div className="card-heading">Camera monitoring</div>
+
+      <div className="camera-frame">
+        <video ref={videoRef} autoPlay muted playsInline />
+
+        {!cameraReady && (
+          <div className="camera-overlay">
+            {cameraError || "Starting camera…"}
+          </div>
+        )}
+      </div>
+
+      <div className="camera-status">
+        <span className={cameraReady ? "status-dot active" : "status-dot"} />
+        {cameraReady ? "Camera active" : "Camera not ready"}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [screen, setScreen] = useState("welcome");
   const [studentName, setStudentName] = useState("");
   const [studentId, setStudentId] = useState("");
 
-  const [showInstructions, setShowInstructions] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [finished, setFinished] = useState(false);
-
   const [questions, setQuestions] = useState([]);
+  const [sessionId, setSessionId] = useState("");
   const [answers, setAnswers] = useState({});
-  const [sessionId, setSessionId] = useState(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-  const [remainingMs, setRemainingMs] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState(
+    EXAM_DURATION_SECONDS
+  );
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [submittedResult, setSubmittedResult] = useState(null);
 
-  const finishLock = useRef(false);
+  const answerQueue = useRef(Promise.resolve());
+  const answersRef = useRef({});
+  const sessionIdRef = useRef("");
+  const submittedRef = useRef(false);
 
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  const minutes = Math.floor(remainingSeconds / 60);
-  const seconds = remainingSeconds % 60;
+  const saveErrors = useRef({});
 
-  function validateStudent() {
-    if (
-      typeof studentName !== "string" ||
-      studentName.trim().length < 2 ||
-      studentName.trim().length > 80
-    ) {
-      return "Student name must be between 2 and 80 characters.";
+  useEffect(() => {
+    if (screen !== "exam") return;
+
+    const timer = setInterval(() => {
+      setRemainingSeconds((previous) => {
+        if (previous <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+
+        return previous - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen === "exam" && remainingSeconds === 0) {
+      finishExam();
+    }
+    // finishExam is intentionally invoked when the timer reaches zero.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remainingSeconds, screen]);
+
+  async function beginExam() {
+    setError("");
+
+    if (studentName.trim().length < 2) {
+      setError("Enter your name to continue.");
+      return;
     }
 
     if (!/^[a-zA-Z0-9_-]{3,20}$/.test(studentId.trim())) {
-      return "Student ID must contain 3-20 letters, numbers, hyphens or underscores.";
-    }
-
-    return "";
-  }
-
-  function reviewInstructions() {
-    setError("");
-    setMessage("");
-
-    const validationError = validateStudent();
-
-    if (validationError) {
-      setError(validationError);
+      setError("Student ID must be 3–20 letters, numbers, hyphens or underscores.");
       return;
     }
 
-    setShowInstructions(true);
-  }
-
-  async function confirmAndStartExam() {
-    if (starting || started) return;
-
-    const validationError = validateStudent();
-
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    const electron = window.electronAPI;
-
-    if (
-      !electron ||
-      typeof electron.startTest !== "function" ||
-      typeof electron.setFullScreen !== "function" ||
-      typeof electron.cancelTest !== "function"
-    ) {
-      setError(
-        "Electron API is unavailable. Check electron/main.cjs and electron/preload.cjs."
-      );
-      return;
-    }
-
-    setStarting(true);
-    setError("");
-    setMessage("");
-
-    let newSessionId = null;
-    let timerStarted = false;
-    let fullscreenEnabled = false;
+    setLoading(true);
 
     try {
-      // 1. Fetch the questions.
-      const questionData = await apiRequest("/api/questions");
+      const questionResponse = await apiRequest("/api/questions");
+      const loadedQuestions = questionResponse.questions || [];
 
-      if (
-        !Array.isArray(questionData.questions) ||
-        questionData.questions.length === 0
-      ) {
-        throw new Error(
-          "No valid exam questions were found in data/questions.json."
-        );
+      if (loadedQuestions.length === 0) {
+        throw new Error("No valid questions were found in questions.json.");
       }
 
-      // 2. Create the session. The backend saves it to sessions.json.
-      const sessionData = await apiRequest("/api/sessions", {
+      // Validate IDs so answers are saved against the actual question IDs.
+      if (loadedQuestions.some((question) => !question.id)) {
+        throw new Error("Every question needs a unique id in questions.json.");
+      }
+
+      const session = await apiRequest("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           studentName: studentName.trim(),
@@ -139,469 +178,479 @@ export default function App() {
         }),
       });
 
-      newSessionId = sessionData?.session?.id;
+      setQuestions(loadedQuestions);
+      setSessionId(session.sessionId);
+      sessionIdRef.current = session.sessionId;
 
-      if (!newSessionId) {
-        throw new Error("The backend did not return a session ID.");
-      }
-
-      // 3. Start the Electron timer.
-      const timer = await electron.startTest({
-        studentName: studentName.trim(),
-        studentId: studentId.trim(),
-      });
-
-      if (!timer?.success || !Number.isFinite(timer.endTime)) {
-        throw new Error("Electron could not start the exam timer.");
-      }
-
-      timerStarted = true;
-
-      // 4. Enable fullscreen.
-      const fullscreenResult = await electron.setFullScreen();
-
-      if (fullscreenResult?.success !== true) {
-        throw new Error("Electron could not enter fullscreen.");
-      }
-
-      fullscreenEnabled = true;
-
-      // 5. Display the exam.
-      setQuestions(questionData.questions);
       setAnswers({});
-      setSessionId(newSessionId);
-      setRemainingMs(Math.max(0, timer.endTime - Date.now()));
+      answersRef.current = {};
+      submittedRef.current = false;
+      setCurrentIndex(0);
+      setRemainingSeconds(EXAM_DURATION_SECONDS);
+      setSubmittedResult(null);
 
-      finishLock.current = false;
+      if (window.electronAPI?.startTest) {
+        await window.electronAPI.startTest({
+          studentName: studentName.trim(),
+          studentId: studentId.trim(),
+        });
+      }
 
-      setShowInstructions(false);
-      setFinished(false);
-      setStarted(true);
-      setError("");
+      if (window.electronAPI?.setFullScreen) {
+        await window.electronAPI.setFullScreen();
+      }
+
+      setScreen("exam");
     } catch (err) {
-      console.error("Exam startup failed:", err);
-
-      // Close an unused session if exam startup failed.
-      if (newSessionId) {
-        try {
-          await apiRequest(`/api/sessions/${newSessionId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: "completed" }),
-          });
-        } catch (cleanupError) {
-          console.error("Session cleanup failed:", cleanupError);
-        }
-      }
-
-      if (timerStarted) {
-        try {
-          await electron.cancelTest();
-        } catch (cancelError) {
-          console.error("Timer cleanup failed:", cancelError);
-        }
-      } else if (fullscreenEnabled) {
-        try {
-          await electron.setFullScreen();
-        } catch (fullscreenError) {
-          console.error(fullscreenError);
-        }
-      }
-
-      setError(err.message || "Unable to start the exam.");
+      setError(err.message || "Could not start the exam.");
     } finally {
-      setStarting(false);
+      setLoading(false);
     }
   }
 
-  const finishExam = useCallback(async () => {
-    if (!sessionId || finishLock.current) return;
+  function chooseAnswer(question, selectedAnswer) {
+    if (submittedRef.current || !sessionIdRef.current) return;
 
-    finishLock.current = true;
+    const questionId = String(question.id);
+
+    // Update the UI with a neutral selection; no correctness is shown.
+    const nextAnswers = {
+      ...answersRef.current,
+      [questionId]: selectedAnswer,
+    };
+
+    answersRef.current = nextAnswers;
+    setAnswers(nextAnswers);
     setError("");
-    setMessage("Saving your exam...");
+
+    // Queue writes so rapid answer changes cannot overwrite each other
+    // out of order.
+  answerQueue.current = answerQueue.current
+  .then(async () => {
+    // Do not skip pending saves when the student clicks Submit.
+    await apiRequest(
+      `/api/sessions/${sessionIdRef.current}/answers/${encodeURIComponent(
+        questionId
+      )}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ selectedAnswer }),
+      }
+    );
+
+    delete saveErrors.current[questionId];
+  })
+  .catch((err) => {
+    saveErrors.current[questionId] = err.message;
+    setError(`Answer could not be saved: ${err.message}`);
+  });
+}
+
+  async function finishExam() {
+    if (submittedRef.current || !sessionIdRef.current) return;
+
+    submittedRef.current = true;
+    setLoading(true);
+    setError("");
 
     try {
-      await apiRequest(`/api/sessions/${sessionId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          answers,
-          status: "completed",
-        }),
-      });
+      // Wait for all answer saves before asking the backend to grade.
+      await answerQueue.current;
 
-      setStarted(false);
-      setFinished(true);
-      setShowInstructions(false);
-      setMessage("Exam submitted successfully.");
+      if (Object.keys(saveErrors.current).length > 0) {
+  throw new Error(
+    "Some answers could not be saved. Please select those answers again before submitting."
+  );
+}
 
-      try {
+      const result = await apiRequest(
+        `/api/sessions/${sessionIdRef.current}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "completed" }),
+        }
+      );
+
+      setSubmittedResult(result);
+      setScreen("result");
+
+      if (window.electronAPI?.cancelTest) {
         await window.electronAPI.cancelTest();
-      } catch (err) {
-        console.error("Could not reset Electron timer:", err);
       }
     } catch (err) {
-      finishLock.current = false;
-      setError(
-        `Could not submit your exam: ${err.message}. Please try again.`
-      );
-      setMessage("");
+      // Permit retry if submission failed, for example because the
+      // backend was temporarily unavailable.
+      submittedRef.current = false;
+      setError(`Could not submit the exam: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
-  }, [sessionId, answers]);
+  }
 
-  // Read the timer from Electron's main process.
-  useEffect(() => {
-    if (!started) return undefined;
+  async function exitExam() {
+    if (!sessionIdRef.current) {
+      setScreen("welcome");
+      return;
+    }
 
-    let active = true;
-    let busy = false;
+    const confirmed = window.confirm(
+      "Are you sure you want to exit? Your exam will be cancelled."
+    );
 
-    async function updateTimer() {
-      if (busy) return;
+    if (!confirmed) return;
 
-      busy = true;
+    setLoading(true);
 
-      try {
-        const timer =
-          await window.electronAPI.getRemainingTime();
+    try {
+      await answerQueue.current.catch(() => {});
 
-        if (!active || !timer?.started) return;
+      await apiRequest(`/api/sessions/${sessionIdRef.current}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "cancelled" }),
+      });
 
-        const remaining = Math.max(
-          0,
-          timer.endTime - Date.now()
-        );
+      submittedRef.current = true;
 
-        setRemainingMs(remaining);
-
-        if (remaining <= 0) {
-          await finishExam();
-        }
-      } catch (err) {
-        console.error("Could not read exam timer:", err);
-      } finally {
-        busy = false;
+      if (window.electronAPI?.cancelTest) {
+        await window.electronAPI.cancelTest();
       }
+
+      setSessionId("");
+      sessionIdRef.current = "";
+      setScreen("welcome");
+    } catch (err) {
+      setError(`Could not cancel the exam: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
+  }
 
-    updateTimer();
+  function resetApp() {
+    setSessionId("");
+    sessionIdRef.current = "";
+    setQuestions([]);
+    setAnswers({});
+    answersRef.current = {};
+    setSubmittedResult(null);
+    setCurrentIndex(0);
+    setRemainingSeconds(EXAM_DURATION_SECONDS);
+    setError("");
+    submittedRef.current = false;
+    setScreen("welcome");
+  }
 
-    const intervalId = setInterval(updateTimer, 1000);
+  const attemptedCount = Object.keys(answers).length;
+  const currentQuestion = questions[currentIndex];
 
-    return () => {
-      active = false;
-      clearInterval(intervalId);
+  if (screen === "welcome") {
+    return (
+      <main className="page">
+        <header className="header">
+          <div className="brand">
+            <div className="logo">A</div>
+            <div>
+              <h1>Athena</h1>
+              <p className="subtitle">Secure Examination System</p>
+            </div>
+          </div>
+        </header>
+
+        <div className="pre-exam-layout">
+          <section className="welcome-card">
+            <span className="eyebrow">EXAM PORTAL</span>
+            <h2>Ready to begin?</h2>
+            <p className="muted">
+              Enter your details before starting your examination.
+            </p>
+
+            <label htmlFor="studentName">Student name</label>
+            <input
+              id="studentName"
+              value={studentName}
+              onChange={(event) => setStudentName(event.target.value)}
+              placeholder="Enter your full name"
+              autoComplete="name"
+            />
+
+            <label htmlFor="studentId">Student ID</label>
+            <input
+              id="studentId"
+              value={studentId}
+              onChange={(event) => setStudentId(event.target.value)}
+              placeholder="Enter your student ID"
+            />
+
+            <div className="exam-info">
+              <div>
+                <span>Duration</span>
+                <strong>60 minutes</strong>
+              </div>
+              <div>
+                <span>Questions</span>
+                <strong>Loaded from backend</strong>
+              </div>
+              <div>
+                <span>Results</span>
+                <strong>Shown after submission</strong>
+              </div>
+            </div>
+
+            {error && <div className="error">{error}</div>}
+
+            <button
+              className="primary-button"
+              onClick={beginExam}
+              disabled={loading}
+            >
+              {loading ? "Starting…" : "Start examination"}
+            </button>
+          </section>
+
+          <CameraPreview />
+        </div>
+      </main>
+    );
+  }
+
+  if (screen === "result" && submittedResult) {
+    const counts = submittedResult.counts || {
+      attempted: 0,
+      correct: 0,
+      wrong: 0,
     };
-  }, [started, finishExam]);
 
-  function chooseAnswer(questionId, option) {
-    setAnswers((current) => ({
-      ...current,
-      [questionId]: option,
-    }));
+    return (
+      <main className="page result-page">
+        <header className="header">
+          <div className="brand">
+            <div className="logo">A</div>
+            <div>
+              <h1>Exam results</h1>
+              <p className="subtitle">Your examination has been submitted</p>
+            </div>
+          </div>
+        </header>
+
+        <section className="result-card">
+          <span className="eyebrow">FINAL REPORT</span>
+          <h2>Exam completed</h2>
+          <p className="muted">
+            {submittedResult.studentName
+              ? `Well done, ${submittedResult.studentName}.`
+              : "Your final result is ready."}
+          </p>
+
+          <div className="result-stats">
+            <div className="stat">
+              <span>Attempted</span>
+              <strong>{counts.attempted}</strong>
+            </div>
+            <div className="stat correct-stat">
+              <span>Correct</span>
+              <strong>{counts.correct}</strong>
+            </div>
+            <div className="stat wrong-stat">
+              <span>Wrong</span>
+              <strong>{counts.wrong}</strong>
+            </div>
+          </div>
+
+          <h3>Answer review</h3>
+
+          {submittedResult.review?.length ? (
+            <div className="review-list">
+              {submittedResult.review.map((item, index) => (
+                <article
+                  className={`review-item ${
+                    item.isCorrect ? "review-correct" : "review-wrong"
+                  }`}
+                  key={item.questionId}
+                >
+                  <div className="review-title">
+                    <strong>
+                      Question {index + 1}: {item.question}
+                    </strong>
+                    <span className={item.isCorrect ? "result-label correct-label" : "result-label wrong-label"}>
+                      {item.isCorrect ? "Correct" : "Wrong"}
+                    </span>
+                  </div>
+
+                  <p>
+                    <strong>Your answer:</strong>{" "}
+                    {item.selectedAnswer || "Not answered"}
+                  </p>
+                  <p>
+                    <strong>Correct answer:</strong>{" "}
+                    {item.correctAnswer ?? "Not available"}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No answers were submitted.</p>
+          )}
+
+          <button className="primary-button" onClick={resetApp}>
+            Back to home
+          </button>
+        </section>
+      </main>
+    );
   }
 
   return (
-    <main className="page">
-      <header className="header">
+    <main className="page exam-page">
+      <header className="header exam-header">
         <div className="brand">
-          <h1 className="logo">ATHENA</h1>
-          <p className="subtitle">Online Examination Platform</p>
+          <div className="logo">A</div>
+          <div>
+            <h1>Athena Examination</h1>
+            <p className="subtitle">{studentName}</p>
+          </div>
         </div>
 
-        {started && (
-          <div className="timer" aria-live="off">
-            <span className="timer-label">Time remaining</span>
-            <span className="timer-value">
-              {String(minutes).padStart(2, "0")}:
-              {String(seconds).padStart(2, "0")}
-            </span>
-          </div>
-        )}
+        <div className="timer">
+          <span>Time remaining</span>
+          <strong>{formatTime(remainingSeconds)}</strong>
+        </div>
       </header>
 
-      {error && (
-        <div className="error" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <div className="error exam-error">{error}</div>}
 
-      {message && (
-        <div className="message" role="status">
-          {message}
-        </div>
-      )}
-
-      {!started && !finished && (
-        <section className="card welcome-card">
-          <div className="card-icon" aria-hidden="true">
-            <span> A </span>
-          </div>
-
-          <p className="eyebrow">STUDENT PORTAL</p>
-          <h2>Welcome to your examination</h2>
-          <p className="card-description">
-            Enter your student details below to review the
-            instructions and begin your exam.
-          </p>
-
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              reviewInstructions();
-            }}
-          >
-            <label className="label" htmlFor="studentName">
-              Student name
-            </label>
-            <input
-              id="studentName"
-              className="input"
-              type="text"
-              value={studentName}
-              onChange={(event) =>
-                setStudentName(event.target.value)
-              }
-              placeholder="Enter your full name"
-              autoComplete="name"
-              maxLength={80}
-              disabled={starting}
-              required
-            />
-
-            <label className="label" htmlFor="studentId">
-              Student ID
-            </label>
-            <input
-              id="studentId"
-              className="input"
-              type="text"
-              value={studentId}
-              onChange={(event) =>
-                setStudentId(event.target.value)
-              }
-              placeholder="Example: STU001"
-              maxLength={20}
-              disabled={starting}
-              required
-            />
-
-            <button
-              className="primaryButton fullWidth"
-              type="submit"
-              disabled={starting}
-            >
-              Review Exam Instructions
-              <span aria-hidden="true"> → </span>
-            </button>
-          </form>
-
-          <p className="security-note">
-            Please verify your details before starting the exam.
-          </p>
-        </section>
-      )}
-
-      {showInstructions && !started && !finished && (
-        <div
-          className="overlay"
-          onClick={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              !starting
-            ) {
-              setShowInstructions(false);
-            }
-          }}
-        >
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="instructions-title"
-          >
-            <div className="modal-heading">
-              <div className="modal-icon" aria-hidden="true">
-                !
-              </div>
-
-              <div>
-                <p className="eyebrow">BEFORE YOU BEGIN</p>
-                <h2 id="instructions-title">
-                  Exam Instructions
-                </h2>
-              </div>
-            </div>
-
-            <div className="student-summary">
-              <div>
-                <span className="summary-label">Student name</span>
-                <strong>{studentName.trim()}</strong>
-              </div>
-
-              <div>
-                <span className="summary-label">Student ID</span>
-                <strong>{studentId.trim()}</strong>
-              </div>
-            </div>
-
-            <h3 className="instructions-subtitle">
-              Please read carefully
-            </h3>
-
-            <ul className="instructions-list">
-              <li>Read every question before choosing an answer.</li>
-              <li>Select the option that best answers each question.</li>
-              <li>Your selected answers are saved when you submit.</li>
-              <li>The examination timer starts after confirmation.</li>
-              <li>Do not close the application during your exam.</li>
-            </ul>
-
-            <p className="modal-note">
-              Confirm only when you are ready to start. Your exam
-              session will be created when you continue.
-            </p>
-
-            <div className="buttonRow">
-              <button
-                className="secondaryButton"
-                type="button"
-                onClick={() => setShowInstructions(false)}
-                disabled={starting}
-              >
-                Go Back
-              </button>
-
-              <button
-                className="primaryButton"
-                type="button"
-                onClick={confirmAndStartExam}
-                disabled={starting}
-              >
-                {starting
-                  ? "Starting Exam..."
-                  : "I Understand & Start Exam"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {started && (
-        <section className="card exam-card">
-          <div className="exam-heading">
-            <div>
-              <p className="eyebrow">EXAM IN PROGRESS</p>
-              <h2>Examination Questions</h2>
-              <p className="card-description">
-                Choose one answer for each question.
-              </p>
-            </div>
-
-            <div className="question-count">
-              {Object.keys(answers).length} / {questions.length}
-              <span> answered</span>
-            </div>
-          </div>
-
-          <div className="student-strip">
+      <div className="exam-layout">
+        <section className="exam-main">
+          <div className="question-topline">
             <span>
-              <strong>Student:</strong> {studentName}
+              Question {currentIndex + 1} of {questions.length}
             </span>
-            <span>
-              <strong>ID:</strong> {studentId}
-            </span>
+            <span className="neutral-status">Answer review after submission</span>
           </div>
 
-          {questions.map((question, index) => (
-            <article
-              key={question.id}
-              className="question"
-            >
-              <div className="question-topline">
-                <span className="question-number">
-                  Question {index + 1}
-                </span>
-
-                <span className="question-status">
-                  {answers[question.id] ? "Answered" : "Not answered"}
-                </span>
-              </div>
-
-              <h3>{question.question}</h3>
-
+          {currentQuestion && (
+            <article className="question-card">
+              <h2>{currentQuestion.question}</h2>
               <div className="options-list">
-                {question.options.map((option, optionIndex) => (
-                  <label
-                    key={`${question.id}-${option}`}
-                    className="option"
-                  >
-                    <input
-                      type="radio"
-                      name={`question-${question.id}`}
-                      value={option}
-                      checked={answers[question.id] === option}
-                      onChange={() =>
-                        chooseAnswer(question.id, option)
-                      }
-                    />
+                {currentQuestion.options.map((option, optionIndex) => {
+                  const selected =
+                    answers[String(currentQuestion.id)] === option;
 
-                    <span className="option-letter">
-                      {String.fromCharCode(65 + optionIndex)}
-                    </span>
-
-                    <span className="option-text">{option}</span>
-                  </label>
-                ))}
+                  return (
+                    <button
+                      key={`${currentQuestion.id}-${optionIndex}`}
+                      type="button"
+                      className={`option ${selected ? "option-selected" : ""}`}
+                      onClick={() => chooseAnswer(currentQuestion, option)}
+                      disabled={loading || submittedRef.current}
+                    >
+                      <span className="option-letter">
+                        {String.fromCharCode(65 + optionIndex)}
+                      </span>
+                      <span>{option}</span>
+                      {selected && (
+                        <span className="selected-label">Selected</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </article>
-          ))}
+          )}
 
-          <div className="submit-row">
-            <p className="submit-hint">
-              Review your answers before submitting.
-            </p>
+          <div className="question-navigation">
+            <button
+              className="secondary-button"
+              onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
+              disabled={currentIndex === 0 || loading}
+            >
+              Previous
+            </button>
 
             <button
-              className="primaryButton"
-              type="button"
-              onClick={finishExam}
-              disabled={finishLock.current}
+              className="secondary-button"
+              onClick={() =>
+                setCurrentIndex((index) =>
+                  Math.min(questions.length - 1, index + 1)
+                )
+              }
+              disabled={currentIndex >= questions.length - 1 || loading}
             >
-              Submit Exam
+              Next
             </button>
           </div>
         </section>
-      )}
 
-      {finished && (
-        <section className="card completion-card">
-          <div className="completion-icon" aria-hidden="true">
-            ✓
-          </div>
+        <aside className="exam-sidebar">
+          <CameraPreview />
 
-          <p className="eyebrow">SUBMISSION COMPLETE</p>
-          <h2>Exam completed</h2>
-          <p className="card-description">
-            Your exam submission has been saved successfully.
-          </p>
+          <section className="sidebar-card">
+            <h3>Exam progress</h3>
+            <div className="progress-number">
+              {attemptedCount}
+              <span> / {questions.length} attempted</span>
+            </div>
 
-          <div className="session-details">
-            <span>Student</span>
-            <strong>{studentName}</strong>
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{
+                  width: `${
+                    questions.length
+                      ? (attemptedCount / questions.length) * 100
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
 
-            <span>Student ID</span>
-            <strong>{studentId}</strong>
+            <p className="muted small">
+              Correct and wrong answers are hidden until the exam is submitted.
+            </p>
+          </section>
 
-            <span>Session ID</span>
-            <strong className="session-id">{sessionId}</strong>
-          </div>
-        </section>
-      )}
+          <section className="sidebar-card">
+            <h3>Questions</h3>
+            <div className="question-grid">
+              {questions.map((question, index) => {
+                const attempted =
+                  answers[String(question.id)] !== undefined;
 
-      <footer className="footer">
-        <span>ATHENA</span>
-        <span>Online Examination Platform</span>
-      </footer>
+                return (
+                  <button
+                    key={question.id}
+                    className={[
+                      "question-number",
+                      index === currentIndex ? "current" : "",
+                      attempted ? "attempted" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onClick={() => setCurrentIndex(index)}
+                    title={attempted ? "Answered" : "Not answered"}
+                  >
+                    {index + 1}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <button
+            className="submit-button"
+            onClick={finishExam}
+            disabled={loading}
+          >
+            {loading ? "Submitting…" : "Submit exam"}
+          </button>
+
+          <button
+            className="text-button"
+            onClick={exitExam}
+            disabled={loading}
+          >
+            Cancel exam
+          </button>
+        </aside>
+      </div>
     </main>
   );
 }
